@@ -1,0 +1,329 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+Patient_ID Unique anonymized identifier per patient
+Visit_Number Sequential clinical visit index
+Visit_Timestamp Date of each visit
+Scan_Type Type of scan performed (Ultrasound, FNA, Elastography)
+Age, Gender, Height, Weight, BMI Basic demographics and body metrics
+Family_History Binary indicator for thyroid disease in family history
+Smoking_Status Categorical: Smoker, Non-Smoker, Former Smoker
+Radiation_Exposure Prior exposure to radiation therapy or sources
+Nodule_Size_mm, Margin_Sharpness, Shape_Score, Echogenicity_Index Radiomic features from scans
+Calcification_Presence, Capsular_Invasion_Indicator Structural indicators linked to malignancy
+Vascularity_Score, Texture_Entropy, Asymmetry_Score Advanced scan-derived imaging biomarkers
+TSH_Risk_Level, TPOAb_Probability, Thyroglobulin_Level_Predicted, Calcitonin_Level_Predicted, Reverse_T3_Index Hormonal indicators
+Heart_Rate, Daily_Steps, Sleep_Patterns, Body_Temperature, Pulse_Oximetry Smart device vitals
+Stress_Level, Symptom_Onset_Duration, Hormonal_Change_Rate, Medication_Adherence Behavioral and progression indicators
+Diagnosis_Label Binary classification (0: Benign, 1: Malignant)
+Cancer_Type Categorical subtype (e.g., Papillary, Follicular, Medullary, etc.)
+Recurrence_Risk Binary risk estimation for recurrence likelihood
+
+```{r}
+library(readr)
+library(ggplot2)
+library(tidyverse)
+library(cowplot)
+library(MASS)
+thyro <- read_csv("~/Desktop/UM/BIOSTAT625/Project//ThyroTrack-MV Processed Dataset.csv", show_col_types = F)
+
+patient_freq = 
+  thyro %>% 
+  group_by(Patient_ID) %>% 
+  summarize(n = n()) 
+
+patient_freq4 = patient_freq %>% 
+  filter(n >= 4)
+
+patient_freq4 = patient_freq4$Patient_ID
+
+thyro4 =
+  thyro %>% 
+  filter(Patient_ID %in% patient_freq4) %>% 
+  group_by(Patient_ID) %>% 
+  mutate(
+    across(c(4, 6, 10, 11, 12, 17, 21, 22, 35, 36, 37, 38) - 1, as.factor)
+  )  %>% 
+  mutate(
+    elapsed_time_days = as.numeric((Visit_Timestamp - min(Visit_Timestamp)))
+  )
+
+ranking = thyro4 %>% 
+  group_by(Patient_ID) %>% 
+  summarize(
+    ave_visitFreq = max(elapsed_time_days) / max(Visit_Number)
+  ) %>% 
+  mutate(rank_visitFreq = as.factor(ntile(ave_visitFreq, 4))) 
+
+thyro4 = thyro4 %>% 
+  left_join(., y = ranking, by = "Patient_ID", keep = F)
+```
+
+indCont not transformed
+```{r}
+thyro4 %>%
+  ggplot(aes(
+    x = Thyroglobulin_Level_Predicted,
+  )) +
+  geom_density(alpha = 0.50)
+
+thyro4 %>%
+  ggplot(aes(
+    x = Calcitonin_Level_Predicted
+  )) +
+  geom_density(alpha = 0.50)
+
+thyro4 %>%
+  ggplot(aes(
+    x = Hormonal_Change_Rate
+  )) +
+  geom_density(alpha = 0.50) 
+
+```
+
+transforming using box cox power parameter lambda. 
+```{r}
+m1 <- lm(Thyroglobulin_Level_Predicted + 1e-6 ~ 1, data = thyro4)
+bc1 = MASS::boxcox(m1, plotit = TRUE)
+optLamda_tg = bc1$x[which.max(bc1$y)]
+
+m2 <- lm(Calcitonin_Level_Predicted + 1e-6 ~ 1, data = thyro4)
+bc2 = MASS::boxcox(m2, plotit = TRUE)
+optLambda_calc = bc2$x[which.max(bc2$y)]
+
+thyro4 = thyro4 %>% 
+  mutate(
+    `bc(tg+1)` = 
+      ((Thyroglobulin_Level_Predicted + 1)^optLamda_tg - 1) / optLamda_tg,
+    `bc(calc+1)` = ((Calcitonin_Level_Predicted + 1)^optLambda_calc -1) / optLambda_calc
+  )
+```
+
+
+indCont transformed
+```{r}
+thyro4 %>%
+  ggplot(aes(
+    x = `bc(tg+1)`,
+  )) +
+  geom_density(alpha = 0.50,
+               fill = "lightblue")
+
+thyro4 %>%
+  ggplot(aes(
+    x = `bc(calc+1)`
+  )) +
+  geom_density(alpha = 0.50,
+               fill = "lightblue")
+
+thyro4 %>%
+  ggplot(aes(
+    x = Hormonal_Change_Rate
+  )) +
+  geom_density(alpha = 0.50,
+               fill = "lightblue") 
+
+```
+
+indCont x indCat
+```{r}
+thyro4 %>%
+  ggplot(aes(
+    x = `bc(tg+1)`,
+    group = TSH_Risk_Level,
+    fill = factor(TSH_Risk_Level)
+  )) +
+  geom_density(alpha = 0.20)
+
+thyro4 %>%
+  ggplot(aes(
+    x = `bc(calc+1)`,
+    group = TSH_Risk_Level,
+    fill = factor(TSH_Risk_Level)
+  )) +
+  geom_density(alpha = 0.20)
+
+thyro4 %>%
+  ggplot(aes(
+    x = Hormonal_Change_Rate,
+    group = TSH_Risk_Level,
+    fill = factor(TSH_Risk_Level)
+  )) +
+  geom_density(alpha = 0.20)
+
+```
+
+
+```{r}
+thyro4 %>%
+  ggplot(aes(
+    x = `bc(tg+1)`,
+    group = Calcification_Presence,
+    fill = factor(Calcification_Presence)
+  )) +
+  geom_density(alpha = 0.20)
+
+thyro4 %>%
+  ggplot(aes(
+    x = `bc(calc+1)`,
+    group = Calcification_Presence,
+    fill = factor(Calcification_Presence)
+  )) +
+  geom_density(alpha = 0.20) 
+
+thyro4 %>%
+  ggplot(aes(
+    x = Hormonal_Change_Rate,
+    group = Calcification_Presence,
+    fill = factor(Calcification_Presence)
+  )) +
+  geom_density(alpha = 0.20)
+
+```
+
+
+Longitudinal center on bc(tg+1)
+```{r}
+center_Tg =
+  thyro4 %>% 
+  group_by(rank_visitFreq, Visit_Number) %>% 
+  summarize(
+            med = median(`bc(tg+1)`),
+            q1 = quantile(`bc(tg+1)`, 0.25),
+            q3 = quantile(`bc(tg+1)`, 0.75),
+            min = min(`bc(tg+1)`),
+            max = max(`bc(tg+1)`)
+            )
+
+center_Calc =
+  thyro4 %>% 
+  group_by(rank_visitFreq, Visit_Number) %>% 
+  summarize(
+            med = median(`bc(calc+1)`),
+            q1 = quantile(`bc(calc+1)`, 0.25),
+            q3 = quantile(`bc(calc+1)`, 0.75),
+            min = min(`bc(calc+1)`),
+            max = max(`bc(calc+1)`)
+            )
+
+center_Horm =
+  thyro4 %>% 
+  group_by(rank_visitFreq, Visit_Number) %>% 
+  summarize(
+            med = median(Hormonal_Change_Rate),
+            q1 = quantile(Hormonal_Change_Rate, 0.25),
+            q3 = quantile(Hormonal_Change_Rate, 0.75),
+            min = min(Hormonal_Change_Rate),
+            max = max(Hormonal_Change_Rate)
+            )
+
+centers_Tg_group = function(cont, x){
+  thyro4 %>%
+    group_by(rank_visitFreq, x) %>%
+    summarize(
+      med = median(.data[[cont]]),
+      q1 = quantile(cont, 0.25),
+      q3 = quantile(cont, 0.75),
+      min = min(cont),
+      max = max(cont)
+    )
+}
+
+
+
+
+```
+
+
+Overall trend graphs. 
+```{r}
+ggplot(data = center_Tg, aes(
+  x = Visit_Number,
+  y = med,
+  ymin = q1,
+  ymax = q3,
+  group = rank_visitFreq
+)) +
+  geom_point() +
+  geom_errorbar(width = 0.05) +
+  geom_point(aes(
+    x = Visit_Number,
+    y = min,
+    colour = "steelblue2"
+  )) +
+  geom_point(aes(
+    x = Visit_Number,
+    y = max,
+    colour = "lightpink2"
+  )) +
+  scale_colour_discrete(name = "Extremum", labels = c("Minimum", "Maximum")) +
+  theme_minimal() +
+  facet_wrap(vars(rank_visitFreq))
+
+###
+
+ggplot(data = center_Calc, aes(
+  x = Visit_Number,
+  y = med,
+  ymin = q1,
+  ymax = q3,
+  group = rank_visitFreq
+)) +
+  geom_point() +
+  geom_errorbar(width = 0.05) +
+  geom_point(aes(
+    x = Visit_Number,
+    y = min,
+    colour = "steelblue2"
+  )) +
+  geom_point(aes(
+    x = Visit_Number,
+    y = max,
+    colour = "lightpink2"
+  )) +
+  scale_colour_discrete(name = "Extremum", labels = c("Minimum", "Maximum")) +
+  theme_minimal() +
+  facet_wrap(vars(rank_visitFreq))
+
+###
+
+ggplot(data = center_Horm, aes(
+  x = Visit_Number,
+  y = med,
+  ymin = q1,
+  ymax = q3,
+  group = rank_visitFreq
+)) +
+  geom_point() +
+  geom_errorbar(width = 0.05) +
+  geom_point(aes(
+    x = Visit_Number,
+    y = min,
+    colour = "steelblue2"
+  )) +
+  geom_point(aes(
+    x = Visit_Number,
+    y = max,
+    colour = "lightpink2"
+  )) +
+  scale_colour_discrete(name = "Extremum", labels = c("Minimum", "Maximum")) +
+  theme_minimal() +
+  facet_wrap(vars(rank_visitFreq))
+```
+
+
+
+
+```{r}
+install.packages("lavaan", dependencies = T)
+library(lavaan)
+```
+
+```{r}
+
+  
+
+```
+
