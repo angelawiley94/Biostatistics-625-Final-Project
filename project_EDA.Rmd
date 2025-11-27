@@ -1,0 +1,495 @@
+---
+title: "Project Notebook"
+output: html_notebook
+---
+
+## Variable Descriptions
+
+Patient_ID Unique anonymized identifier per patient
+Visit_Number Sequential clinical visit index
+Visit_Timestamp Date of each visit
+Scan_Type Type of scan performed (Ultrasound, FNA, Elastography)
+Age, Gender, Height, Weight, BMI Basic demographics and body metrics
+Family_History Binary indicator for thyroid disease in family history
+Smoking_Status Categorical: Smoker, Non-Smoker, Former Smoker
+Radiation_Exposure Prior exposure to radiation therapy or sources
+Nodule_Size_mm, Margin_Sharpness, Shape_Score, Echogenicity_Index Radiomic features from scans
+
+Calcification_Presence, Capsular_Invasion_Indicator Structural indicators linked to malignancy
+
+Vascularity_Score, Texture_Entropy, Asymmetry_Score Advanced scan-derived imaging biomarkers
+
+TSH_Risk_Level, TPOAb_Probability, Thyroglobulin_Level_Predicted, Calcitonin_Level_Predicted, Reverse_T3_Index Hormonal indicators
+Heart_Rate, Daily_Steps, Sleep_Patterns, Body_Temperature, Pulse_Oximetry Smart device vitals
+
+Stress_Level, Symptom_Onset_Duration, Hormonal_Change_Rate, Medication_Adherence Behavioral and progression indicators
+
+Diagnosis_Label Binary classification (0: Benign, 1: Malignant)
+Cancer_Type Categorical subtype (e.g., Papillary, Follicular, Medullary, etc.)
+
+Recurrence_Risk Binary risk estimation for recurrence likelihood
+
+```{r Downloading packages and Importing Dataset}
+library(readr)
+library(ggplot2)
+library(purrr)
+library(tidyverse)
+library(cowplot)
+library(MASS)
+library(lavaan)
+
+thyro <- read_csv("~/Desktop/UM/BIOSTAT625/Project//ThyroTrack-MV Processed Dataset.csv", show_col_types = F)
+```
+
+``` {r Data manipulation and cleaning}
+patient_freq = 
+  thyro %>% 
+  group_by(Patient_ID) %>% 
+  summarize(n = n()) 
+
+patient_freq4 = patient_freq %>% 
+  filter(n >= 4)
+
+patient_freq4 = patient_freq4$Patient_ID
+
+thyro4 =
+  thyro %>% 
+  filter(Patient_ID %in% patient_freq4) %>% 
+  group_by(Patient_ID) %>% 
+  mutate(
+    across(c(4, 6, 10, 11, 12, 17, 21, 22, 35, 36, 37, 38) - 1, as.factor)
+  )  %>% 
+  mutate(
+    elapsed_time_days = as.numeric((Visit_Timestamp - min(Visit_Timestamp)))
+  ) %>% 
+  ungroup()
+
+thyro4 = thyro4 %>% 
+  group_by(Patient_ID) %>% 
+  mutate(
+    elapsed_time_prop = elapsed_time_days / max(elapsed_time_days)
+  ) %>% 
+  ungroup()
+
+ranking = thyro4 %>% 
+  group_by(Patient_ID) %>% 
+  summarize(
+    ave_visitFreq = max(elapsed_time_days) / max(Visit_Number)
+  ) %>% 
+  mutate(rank_visitFreq = as.factor(ntile(ave_visitFreq, 4))) %>% 
+  ungroup()
+
+thyro4 = thyro4 %>% 
+  left_join(., y = ranking, by = "Patient_ID", keep = F)
+```
+
+
+```{r Continuous indicators non-transformed}
+thyro4 %>%
+  ggplot(aes(
+    x = Thyroglobulin_Level_Predicted,
+  )) +
+  geom_density(alpha = 0.50)
+
+thyro4 %>%
+  ggplot(aes(
+    x = Calcitonin_Level_Predicted
+  )) +
+  geom_density(alpha = 0.50)
+
+thyro4 %>%
+  ggplot(aes(
+    x = Hormonal_Change_Rate
+  )) +
+  geom_density(alpha = 0.50) 
+
+```
+
+ 
+```{r Box Cox transforming continuous indicators}
+m1 <- lm(Thyroglobulin_Level_Predicted + 1e-6 ~ 1, data = thyro4)
+bc1 = MASS::boxcox(m1, plotit = TRUE)
+optLamda_tg = bc1$x[which.max(bc1$y)]
+
+m2 <- lm(Calcitonin_Level_Predicted + 1e-6 ~ 1, data = thyro4)
+bc2 = MASS::boxcox(m2, plotit = TRUE)
+optLambda_calc = bc2$x[which.max(bc2$y)]
+
+thyro4 = thyro4 %>% 
+  mutate(
+    `bc(tg+1)` = 
+      ((Thyroglobulin_Level_Predicted + 1)^optLamda_tg - 1) / optLamda_tg,
+    `bc(calc+1)` = ((Calcitonin_Level_Predicted + 1)^optLambda_calc -1) / optLambda_calc
+  )
+```
+
+
+#### Exploratory Data Analysis 
+
+```{r Graphs of transformed continuous indicators}
+thyro4 %>%
+  ggplot(aes(
+    x = `bc(tg+1)`,
+  )) +
+  geom_density(alpha = 0.50,
+               fill = "lightblue")
+
+thyro4 %>%
+  ggplot(aes(
+    x = `bc(calc+1)`
+  )) +
+  geom_density(alpha = 0.50,
+               fill = "lightblue")
+
+thyro4 %>%
+  ggplot(aes(
+    x = Hormonal_Change_Rate
+  )) +
+  geom_density(alpha = 0.50,
+               fill = "lightblue") 
+
+```
+
+
+```{r Graphs of transformed continuous indicators w.r.t. discrete indicators}
+plotList1 = list(
+  thyro4 %>%
+    ggplot(aes(
+      x = `bc(tg+1)`,
+      group = TSH_Risk_Level,
+      fill = factor(TSH_Risk_Level)
+    )) +
+    geom_density(alpha = 0.20),
+  
+  thyro4 %>%
+    ggplot(aes(
+      x = `bc(calc+1)`,
+      group = TSH_Risk_Level,
+      fill = factor(TSH_Risk_Level)
+    )) +
+    geom_density(alpha = 0.20),
+  
+  thyro4 %>%
+    ggplot(
+      aes(
+        x = Hormonal_Change_Rate,
+        group = TSH_Risk_Level,
+        fill = factor(TSH_Risk_Level)
+      )
+    ) +
+    geom_density(alpha = 0.20),
+  
+  thyro4 %>%
+    ggplot(
+      aes(
+        x = `bc(tg+1)`,
+        group = Calcification_Presence,
+        fill = factor(Calcification_Presence)
+      )
+    ) +
+    geom_density(alpha = 0.20),
+  
+  thyro4 %>%
+    ggplot(
+      aes(
+        x = `bc(calc+1)`,
+        group = Calcification_Presence,
+        fill = factor(Calcification_Presence)
+      )
+    ) +
+    geom_density(alpha = 0.20),
+  
+  thyro4 %>%
+    ggplot(
+      aes(
+        x = Hormonal_Change_Rate,
+        group = Calcification_Presence,
+        fill = factor(Calcification_Presence)
+      )
+    ) +
+    geom_density(alpha = 0.20),
+  
+  thyro4 %>%
+    ggplot(
+      aes(
+        x = `bc(tg+1)`,
+        group = Capsular_Invasion_Indicator,
+        fill = factor(Capsular_Invasion_Indicator)
+      )
+    ) +
+    geom_density(alpha = 0.20),
+  
+  thyro4 %>%
+    ggplot(
+      aes(
+        x = `bc(calc+1)`,
+        group = Capsular_Invasion_Indicator,
+        fill = factor(Capsular_Invasion_Indicator)
+      )
+    ) +
+    geom_density(alpha = 0.20),
+  
+  thyro4 %>%
+    ggplot(
+      aes(
+        x = Hormonal_Change_Rate,
+        group = Capsular_Invasion_Indicator,
+        fill = factor(Capsular_Invasion_Indicator)
+      )
+    ) +
+    geom_density(alpha = 0.20)
+)
+
+plot_grid(plotlist = plotList1, nrow = 3)
+```
+
+
+#### bc(Tg + 1) on bc(Calc + 1), bc(Tg + 1) on Hormonal, and bc(Calc + 1) on Horm. 
+```{r}
+thyro4 %>% 
+  ggplot(aes(x = `bc(tg+1)`, y = `bc(calc+1)`)) +
+  geom_point() 
+
+thyro4 %>% 
+  ggplot(aes(x = `bc(tg+1)`, y = Hormonal_Change_Rate)) +
+  geom_point() 
+
+thyro4 %>% 
+  ggplot(aes(x = `bc(calc+1)`, y = Hormonal_Change_Rate)) +
+  geom_point() 
+
+```
+
+```{r Longitudinal trends of bc(tg+1) center across all discrete indicators}
+d1 = thyro4 %>%
+  filter(elapsed_time_prop == 0 | elapsed_time_prop == 1) %>%
+  group_by(
+    factor(elapsed_time_prop), 
+    TSH_Risk_Level,
+    Calcification_Presence,
+    Capsular_Invasion_Indicator
+    ) %>%
+  summarize(
+    median = median(`bc(tg+1)`),
+    q1 = quantile(`bc(tg+1)`, 0.25),
+    q3 = quantile(`bc(tg+1)`, 0.75)
+  ) %>% 
+  as.data.frame()
+
+d1.1 =
+d1 %>% 
+  group_by(`factor(elapsed_time_prop)`) %>% 
+  summarize(median = median(median),
+            q1 = median(q1),
+            q3 = median(q3)
+            ) %>% 
+  as.data.frame()
+```
+
+``` {r Graphing the basic trends}
+p1 = 
+thyro4 %>% 
+  filter(elapsed_time_prop > 0 & elapsed_time_prop < 1) %>% 
+  ggplot(aes(x = elapsed_time_prop, y = `bc(tg+1)`)) +
+  geom_point(alpha = 0.01) +
+  geom_pointrange(aes(x = 1,
+                  y = d1$median[2],
+                  ymin = d1$q1[2],
+                  ymax = d1$q3[2]
+                  ),
+                  colour = "steelblue3"
+                  ) +
+  geom_pointrange(aes(x = 0,
+                  y = d1$median[1],
+                  ymin = d1$q1[1],
+                  ymax = d1$q3[1]
+                  ),
+                  colour = "steelblue3"
+                  ) +
+  geom_segment(
+    aes(
+      x = 0,
+      xend = 1,
+      y = d1$median[1],
+      yend = d1$median[2]
+    ),
+    colour = "steelblue3"
+  ) +
+  theme(shape = 1) +
+  theme_minimal() 
+```
+
+
+```{r Overall trend graphs.}
+ggplot(data = center_Tg, aes(
+  x = Visit_Number,
+  y = med,
+  ymin = q1,
+  ymax = q3
+))
+
+###
+
+ggplot(data = center_Calc, aes(
+  x = Visit_Number,
+  y = med,
+  ymin = q1,
+  ymax = q3,
+  group = rank_visitFreq
+)) +
+  geom_point() +
+  geom_errorbar(width = 0.05) +
+  geom_point(aes(
+    x = Visit_Number,
+    y = min,
+    colour = "steelblue2"
+  )) +
+  geom_point(aes(
+    x = Visit_Number,
+    y = max,
+    colour = "lightpink2"
+  )) +
+  scale_colour_discrete(name = "Extremum", labels = c("Minimum", "Maximum")) +
+  theme_minimal() +
+  facet_wrap(vars(rank_visitFreq))
+
+###
+
+ggplot(data = center_Horm, aes(
+  x = Visit_Number,
+  y = med,
+  ymin = q1,
+  ymax = q3,
+  group = rank_visitFreq
+)) +
+  geom_point() +
+  geom_errorbar(width = 0.05) +
+  geom_point(aes(
+    x = Visit_Number,
+    y = min,
+    colour = "steelblue2"
+  )) +
+  geom_point(aes(
+    x = Visit_Number,
+    y = max,
+    colour = "lightpink2"
+  )) +
+  scale_colour_discrete(name = "Extremum", labels = c("Minimum", "Maximum")) +
+  theme_minimal() +
+  facet_wrap(vars(rank_visitFreq))
+```
+
+```{r Widening continuous response variables to set up for LGC.}
+wide_thyro4_Tg = thyro4 %>%
+  pivot_wider(
+    id_cols = Patient_ID,
+    names_from = Visit_Number,
+    values_from = `bc(tg+1)`,
+    names_prefix = "tg"
+  )
+
+wide_thyro4_time = thyro4 %>%
+  pivot_wider(
+    id_cols = Patient_ID,
+    names_from = Visit_Number,
+    values_from = elapsed_time_prop,
+    names_prefix = "prop_time"
+  )
+
+wide_thyro4_Calc = thyro4 %>%
+  pivot_wider(
+    id_cols = Patient_ID,
+    names_from = Visit_Number,
+    values_from = `bc(calc+1)`,
+    names_prefix = "ct"
+  )
+
+wide_thyro4_Horm = thyro4 %>%
+  pivot_wider(
+    id_cols = Patient_ID,
+    names_from = Visit_Number,
+    values_from = Hormonal_Change_Rate,
+    names_prefix = "horm"
+  )
+
+wide_TgXTime = 
+  left_join(x = wide_thyro4_Tg, y = wide_thyro4_time, by = "Patient_ID")
+
+wide_CalcXTime = 
+  left_join(x = wide_thyro4_Calc, y = wide_thyro4_time, by = "Patient_ID")
+
+wide_HormXTime = 
+  left_join(x = wide_thyro4_Horm, y = wide_thyro4_time, by = "Patient_ID")
+
+```
+
+```{r LGC on Tg}
+lgc_Tg <- '
+  # Latent intercept
+  i =~ 1*tg1 + 1*tg2 + 1*tg3 + 1*tg4 + 1*tg5
+  
+  # Latent slope (latent basis)
+  s =~ 0*tg1 + l2*tg2 + l3*tg3 + l4*tg4 + 1*tg5
+
+  # Latent means
+  i ~ 1
+  s ~ 1
+
+  # Latent variances and covariance
+  i ~~ i
+  s ~~ s
+  i ~~ s
+
+  # Residual variances
+  tg1 ~~ tg1
+  tg2 ~~ tg2
+  tg3 ~~ tg3
+  tg4 ~~ tg4
+  tg5 ~~ tg5
+'
+
+# Fit model using robust ML and FIML for missing data
+fit <- growth(lgc_Tg,
+              data = wide_TgXTime,
+              missing = "fiml",
+              estimator = "MLR")
+
+summary(fit, fit.measures = TRUE, standardized = TRUE)
+
+```
+
+```{r LGC on Calc}
+lgc_Tg <- '
+  # Latent intercept
+  i =~ 1*tg1 + 1*tg2 + 1*tg3 + 1*tg4 + 1*tg5
+  
+  # Latent slope (latent basis)
+  s =~ 0*tg1 + l2*tg2 + l3*tg3 + l4*tg4 + 1*tg5
+
+  # Latent means
+  i ~ 1
+  s ~ 1
+
+  # Latent variances and covariance
+  i ~~ i
+  s ~~ s
+  i ~~ s
+
+  # Residual variances
+  tg1 ~~ tg1
+  tg2 ~~ tg2
+  tg3 ~~ tg3
+  tg4 ~~ tg4
+  tg5 ~~ tg5
+'
+
+# Fit model using robust ML and FIML for missing data
+fit <- growth(lgc_Tg,
+              data = wide_TgXTime,
+              missing = "fiml",
+              estimator = "MLR")
+
+summary(fit, fit.measures = TRUE, standardized = TRUE)
+
+```
+
