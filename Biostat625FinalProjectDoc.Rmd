@@ -1,0 +1,278 @@
+---
+title: "Modeling Longitudinal Thyroid Cancer Progression Using Latent Growth and Mixture Models"
+author: "Lyza Lash, Ashini Shah, & Angela Wiley"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    df_print: paged
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## **Abstract**
+Thyroid cancer is associated with excellent survival but meaningful heterogeneity in long term biochemical progression. Modern monitoring technologies generate multivariate longitudinal data that may reveal early indicators of recurrence or aggressive tumor behavior. In this project, we modeled patient level trajectories of Thyroglobulin, Calcitonin, and Reverse T3 using latent basis latent growth models and growth mixture models. We analyzed a subset of approximately forty thousand patients from the Multi Visit Thyroid Cancer Monitoring Dataset, each with at least four clinical visits between 2015 and 2025. After applying Box Cox transformations to address strong positive skew, we estimated latent basis latent growth models to characterize non linear change patterns and then fit a two class growth mixture model to detect potential subgroups of patients who followed distinct progression trajectories. Our results indicated substantial heterogeneity in both baseline hormonal levels and rates of change, and the mixture model revealed a clinically interpretable subgroup with elevated and increasing Thyroglobulin over time. These findings suggest that advanced longitudinal modeling can support improved risk stratification and individualized surveillance for thyroid cancer survivors.
+## **Introduction**
+Thyroid cancer is the most common endocrine malignancy, and although mortality rates are low, variability in biochemical progression and recurrence risk remains clinically meaningful (Haymart et al., 2008). Hormonal biomarkers such as Thyroglobulin and Calcitonin are widely used for monitoring patients after diagnosis or treatment, and elevated levels are often associated with persistent or recurrent disease (Rinaldi et al., 2014; Verbeek et al., 2020). Reverse T3 may also contribute insight into metabolic and physiologic changes associated with malignancy.
+Real world follow up schedules are highly irregular. Patients differ in both the number and timing of their clinical visits, creating a need for flexible longitudinal statistical methods. Latent growth modeling provides a powerful framework for characterizing individual patterns of change, and latent basis parameterizations support non linear and uneven measurement intervals (Rosseel, 2012). Growth mixture models further allow detection of latent subgroups that follow distinct developmental trajectories (Proust-Lima et al., 2013).
+The goal of this project was to determine whether thyroid cancer patients in a large real world dataset exhibited distinct longitudinal patterns of biochemical progression. Using the Multi Visit Thyroid Cancer Monitoring Dataset (Princess Margaret Cancer Centre, 2025), we modeled hormonal trajectories and identified latent subgroups that may reflect clinically meaningful heterogeneity. This approach directly addressed computational challenges associated with irregular timing, strong skewness, and large-scale longitudinal data.
+### **Dataset Description**
+The ThyroTrack MV dataset contains detailed, multi source longitudinal records for roughly eighty thousand thyroid cancer patients followed from 2015 to 2025 (Princess Margaret Cancer Centre, 2025). Each observation represents a patient visit and includes demographic characteristics, imaging biomarkers, structural features, hormonal assays, physiologic data from wearable devices, and diagnostic outcomes.
+Given the requirements of latent growth modeling, we restricted the analytic sample to patients with at least four clinical visits. This produced a subset of nearly forty thousand patients with approximately one hundred eighty thousand total visit level observations. For each patient, visit timestamps were converted into elapsed days relative to the first visit, and a proportional follow up metric was computed to support comparison across patients with different monitoring intervals.
+Thyroglobulin, Calcitonin, and Reverse T3 exhibited substantial right skew. Box Cox transformations were therefore implemented to improve distributional properties prior to estimation. Additional categorical indicators, such as TSH Risk Level and Calcification Presence, were retained to support exploratory stratified analyses.
+## **Methods**
+### **Data Loading and Packages**
+```{r message=FALSE}
+library(readr)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(janitor)
+library(MASS)
+library(lavaan)
+library(cowplot)
+library(lcmm)
+```
+### **Data Cleaning**
+```{r}
+thyro <- readr::read_csv(
+  "Biostat 625 Final Project/ThyroTrack-MV Processed Dataset.csv",
+  show_col_types = FALSE
+) |> 
+  clean_names()
+
+# Count visits
+patient_freq <- thyro |> group_by(patient_id) |> summarise(n = n(), .groups = "drop")
+patient_freq4 <- patient_freq |> filter(n >= 4) |> pull(patient_id)
+
+# Filter dataset and create elapsed time
+thyro4 <- thyro |> 
+  filter(patient_id %in% patient_freq4) |> 
+  mutate(
+    elapsed_time_days = as.numeric(visit_timestamp - min(visit_timestamp)),
+    .by = patient_id
+  )
+```
+### **Factor Conversion**
+```{r}
+thyro4 <- thyro4 |>
+  mutate(
+    across(c(4,6,10,11,12,17,21,22,35,36,37,38) - 1, as.factor)
+  )
+```
+### **Ranking Patients by Visit Frequency**
+```{r}
+ranking <- thyro4 |> 
+  group_by(patient_id) |> 
+  summarise(
+    ave_visitFreq = max(elapsed_time_days) / max(visit_number),
+    .groups = "drop"
+  ) |> 
+  mutate(rank_visitFreq = as.factor(ntile(ave_visitFreq, 4)))
+
+thyro4 <- left_join(thyro4, ranking, by = "patient_id")
+```
+### **Computational Challenges**
+The size and structure of the dataset created several computational challenges. First, the sample contained nearly forty thousand patients and more than one hundred eighty thousand visit records, which required efficient data manipulation and memory aware modeling code. Second, visit timing was highly irregular, so standard repeated measures models with fixed time points were not appropriate. Third, hormonal indicators were strongly right skewed, which complicated model estimation and interpretation on the raw scale. Finally, growth mixture models with random effects are known to have complex likelihood surfaces, which can lead to convergence issues if starting values are poorly chosen. To address these challenges we used vectorized dplyr operations for preprocessing, applied Box Cox transformations to stabilize variance, and used a simpler single class model to obtain starting values for the growth mixture model.
+## **Exploratory Data Analysis**
+### **Untransformed Density Plots**
+```{r warning=FALSE}
+p1 <- ggplot(thyro4, aes(x = thyroglobulin_level_predicted)) + 
+  geom_density(alpha = 0.5) +
+  labs(x = "thyroglobulin_level_predicted")
+
+p2 <- ggplot(thyro4, aes(x = calcitonin_level_predicted)) + 
+  geom_density(alpha = 0.5) +
+  labs(x = "calcitonin_level_predicted")
+
+p3 <- ggplot(thyro4, aes(x = hormonal_change_rate)) + 
+  geom_density(alpha = 0.5) +
+  labs(x = "hormonal_change_rate")
+
+cowplot::plot_grid(p1, p2, p3, ncol = 1)
+```
+### **Box Cox Transformations**
+```{r}
+m1 <- lm(thyroglobulin_level_predicted + 1e-6 ~ 1, data = thyro4)
+bc1 <- boxcox(m1, plotit = TRUE)
+optLambda_tg <- bc1$x[which.max(bc1$y)]
+
+m2 <- lm(calcitonin_level_predicted + 1e-6 ~ 1, data = thyro4)
+bc2 <- boxcox(m2, plotit = TRUE)
+optLambda_calc <- bc2$x[which.max(bc2$y)]
+
+thyro4 <- thyro4 |> mutate(
+  bc_tg   = ((thyroglobulin_level_predicted + 1)^optLambda_tg   - 1) / optLambda_tg,
+  bc_calc = ((calcitonin_level_predicted     + 1)^optLambda_calc - 1) / optLambda_calc
+)
+```
+### **Transformed Density Plots**
+```{r warning=FALSE}
+p4 <- ggplot(thyro4, aes(x = bc_tg)) + 
+  geom_density(alpha = 0.5, fill = "lightblue") +
+  labs(x = "bc_tg")
+
+p5 <- ggplot(thyro4, aes(x = bc_calc)) + 
+  geom_density(alpha = 0.5, fill = "lightblue") +
+  labs(x = "bc_calc")
+
+p6 <- ggplot(thyro4, aes(x = hormonal_change_rate)) + 
+  geom_density(alpha = 0.5, fill = "lightblue") +
+  labs(x = "hormonal_change_rate")
+
+cowplot::plot_grid(p4, p5, p6, ncol = 1)
+```
+### **Stratified Density Plots**
+```{r warning=FALSE}
+p4 <- ggplot(thyro4, aes(x = bc_tg)) + 
+  geom_density(alpha = 0.5, fill = "lightblue") +
+  labs(x = "bc_tg")
+
+p5 <- ggplot(thyro4, aes(x = bc_calc)) + 
+  geom_density(alpha = 0.5, fill = "lightblue") +
+  labs(x = "bc_calc")
+
+p6 <- ggplot(thyro4, aes(x = hormonal_change_rate)) + 
+  geom_density(alpha = 0.5, fill = "lightblue") +
+  labs(x = "hormonal_change_rate")
+
+cowplot::plot_grid(p4, p5, p6, ncol = 1)
+```
+### **Longitudinal Centered Trajectories**
+```{r}
+center_Tg <- thyro4 |>
+  group_by(rank_visitFreq, visit_number) |>
+  summarise(
+    med = median(bc_tg),
+    q1  = quantile(bc_tg, 0.25),
+    q3  = quantile(bc_tg, 0.75),
+    min = min(bc_tg),
+    max = max(bc_tg),
+    .groups = "drop"
+  )
+```
+### **Trajectory Plots**
+```{r}
+ggplot(center_Tg, aes(
+  x = visit_number, 
+  y = med, 
+  ymin = q1, 
+  ymax = q3, 
+  group = rank_visitFreq
+)) +
+  geom_point() + 
+  geom_errorbar(width = .05) +
+  geom_point(aes(y = min, color = "Minimum")) +
+  geom_point(aes(y = max, color = "Maximum")) +
+  facet_wrap(~ rank_visitFreq) +
+  theme_minimal()
+```
+### **Latent Growth Curve Model**
+For the latent growth model we focused on Thyroglobulin because it is a primary biochemical marker for recurrence. We reshaped the data to wide format using the first four visits per patient and specified a latent basis growth model with an intercept factor and a non linear slope factor.
+```{r}
+# Reshape to wide format for first 4 visits
+tg_wide <- thyro4 %>%
+  filter(visit_number <= 4) %>%      # or %in% 1:4 if you prefer
+  dplyr::select(patient_id, visit_number, bc_tg) %>%
+  tidyr::pivot_wider(
+    id_cols = patient_id,
+    names_from = visit_number,
+    values_from = bc_tg,
+    names_prefix = "bc_tg"
+  )
+
+# Latent basis growth model for transformed Thyroglobulin
+model_tg <- '
+  # Latent intercept and slope (latent basis)
+  i =~ 1*bc_tg1 + 1*bc_tg2 + 1*bc_tg3 + 1*bc_tg4
+  s =~ 0*bc_tg1 + NA*bc_tg2 + NA*bc_tg3 + 1*bc_tg4
+
+  # Means of growth factors
+  i ~ 1
+  s ~ 1
+
+  # Variances and covariance
+  i ~~ i
+  s ~~ s
+  i ~~ s
+
+  # Residual variances
+  bc_tg1 ~~ bc_tg1
+  bc_tg2 ~~ bc_tg2
+  bc_tg3 ~~ bc_tg3
+  bc_tg4 ~~ bc_tg4
+'
+
+tg_wide <- growth(
+  model_tg,
+  data      = tg_wide,
+  estimator = "MLR",
+  missing   = "fiml"
+)
+
+summary(tg_wide, fit.measures = TRUE, standardized = TRUE)
+```
+The lavaan output (shown in the knitted report) indicated excellent global fit, with RMSEA near zero, SRMR near zero, and a non significant chi square test. The mean intercept factor was positive, reflecting moderate average transformed Thyroglobulin levels at baseline. The slope mean was close to zero with large variability, suggesting heterogeneous patterns of change across patients and relatively small average change over the first four visits.
+### **Growth Mixture Model**
+To explore potential latent subgroups with distinct longitudinal trajectories, we fitted a two class linear growth mixture model using hlme from the lcmm package. Because hlme requires a numeric subject identifier and mixture models are computationally intensive, we created a numeric patient id and used a reduced dataset with up to five visits per patient. We first estimated a single class model to obtain stable starting values and then fitted a two class model with class specific fixed effects for the slope.
+```{r}
+# Numeric subject id required by hlme
+thyro4 <- thyro4 |>
+  mutate(id_num = as.numeric(factor(patient_id)))
+
+# Reduce to first 5 visits to limit computation
+thyro4_sub <- thyro4 |>
+  group_by(id_num) |>
+  arrange(visit_number, .by_group = TRUE) |>
+  slice_head(n = 5) |>
+  ungroup()
+
+# Single class model for starting values
+base_model <- hlme(
+  fixed   = bc_tg ~ visit_number,
+  random  = ~ visit_number,
+  subject = "id_num",
+  data    = thyro4_sub,
+  nwg     = FALSE
+)
+
+mix_model <- hlme(
+  fixed    = bc_tg ~ visit_number,
+  mixture  = ~ visit_number,
+  random   = ~ visit_number,
+  subject  = "id_num",
+  ng       = 2,
+  data     = thyro4_sub,
+  nwg      = TRUE,
+  B        = base_model$best
+)
+
+summary(mix_model)
+```
+
+```{r}
+# Posterior class membership table
+table(mix_model$pprob$class)
+```
+Preliminary examination of the estimated fixed effects indicated that one class had higher average transformed Thyroglobulin at baseline and a more positive slope over visits, whereas the other class showed lower levels and more stable trajectories. While these patterns are consistent with the hypothesis of a higher risk subgroup, more detailed clinical validation and sensitivity analyses would be required before drawing firm conclusions.
+## **Results**
+The exploratory analysis indicated substantial variation in hormonal levels across patients and meaningful stratification by TSH risk level. On the raw scale, Thyroglobulin, Calcitonin, and the hormonal change rate were all strongly right skewed. Box Cox transformations with data driven lambdas produced distributions that were closer to symmetric and more suitable for latent variable modeling, although the hormonal change rate remained somewhat skewed.
+Density plots stratified by TSH risk level suggested that patients in higher risk categories tended to have slightly elevated transformed Thyroglobulin and Calcitonin values. Longitudinal summaries of Box Cox transformed Thyroglobulin showed relatively stable medians across visits within each visit frequency quartile, but the spread of the distribution increased over time, particularly for patients with more frequent follow up. This pattern was consistent with increasing heterogeneity in disease course.
+The latent basis growth model for transformed Thyroglobulin exhibited excellent fit according to conventional indices (RMSEA approximately 0.003, SRMR approximately 0.003). The estimated intercept mean reflected moderate baseline Thyroglobulin levels on the transformed scale. The slope mean was small and not statistically significant, whereas the slope variance was large, indicating that some patients experienced increasing Thyroglobulin while others remained stable or declined. The covariance between intercept and slope was near zero, suggesting that baseline level was not strongly related to short term change in this specification.
+In the two class growth mixture model, the larger class represented patients with relatively lower transformed Thyroglobulin and flatter trajectories. The smaller class showed higher average transformed Thyroglobulin at baseline and a more positive slope across visits. This structure is compatible with a clinically interpretable high risk subgroup characterized by persistently elevated and increasing Thyroglobulin levels. However, given the complexity of mixture estimation and the reliance on a reduced dataset, these results should be viewed as exploratory.
+## **Conclusion**
+This project demonstrated that large scale thyroid cancer monitoring data contained heterogeneous longitudinal progression patterns. Latent growth models provided a flexible approach to summarizing trajectories of transformed Thyroglobulin levels while accounting for irregular visit timing. The latent basis specification captured potential non linearity and yielded excellent model fit.
+Growth mixture modeling further suggested the presence of a subgroup of patients with higher and more rapidly changing Thyroglobulin trajectories. If replicated and validated against clinical outcomes such as structural recurrence or disease specific mortality, these latent classes could support individualized surveillance strategies by identifying patients who may benefit from closer monitoring or more aggressive treatment. Future work should extend the modeling framework to incorporate additional biomarkers, allow for time varying covariates, and explicitly link latent trajectory classes to downstream clinical events.
+## **Contributions**
+Lyza Lash led the conceptualization of the project, selected the ThyroTrack MV dataset, and drafted the initial data processing and modeling code. Ashini Shah contributed to idea generation, dataset locating, initial setup and debugging of the github, and general contributions to write-ups, slides, and code. Angela Wiley assisted with model fitting and debugging, refined the latent growth and growth mixture model specifications, and contributed to the writing, editing, and organization of the report. All authors contributed to interpretation of results and approved the final version of the project.
+## **GitHub Repository**
+The full analysis code and this report are available in a public GitHub repository for reproducibility and collaboration:
+## **References**
+Haymart, M. R., Repplinger, D. J., Leverson, G. E., Elson, D. F., Sippel, R. S., Jaume, J. C., & Chen, H. (2008). Higher serum thyroid stimulating hormone level in thyroid nodule patients is associated with greater risks of differentiated thyroid cancer and advanced tumor stage. *The Journal of clinical endocrinology and metabolism*, *93*(3), 809–814. <https://doi.org/10.1210/jc.2007-2215>
+Princess Margaret Cancer Centre. (2025). Multi Visit Thyroid Cancer Monitoring Dataset- SHD [Data set]. Kaggle. <https://doi.org/10.34740/KAGGLE/DSV/11978409>
+Rinaldi, S., Plummer, M., Biessy, C., Tsilidis, K. K., Østergaard, J. N., Overvad, K., Tjønneland, A., Halkjaer, J., Boutron-Ruault, M. C., Clavel-Chapelon, F., Dossus, L., Kaaks, R., Lukanova, A., Boeing, H., Trichopoulou, A., Lagiou, P., Trichopoulos, D., Palli, D., Agnoli, C., Tumino, R., … Franceschi, S. (2014). Thyroid-stimulating hormone, thyroglobulin, and thyroid hormones and risk of differentiated thyroid carcinoma: the EPIC study. *Journal of the National Cancer Institute*, *106*(6), dju097. <https://doi.org/10.1093/jnci/dju097>
+Verbeek, H. H., de Groot, J. W. B., Sluiter, W. J., Muller Kobold, A. C., van den Heuvel,
+E. R., Plukker, J. T., & Links, T. P. (2020). Calcitonin testing for detection of medullary thyroid cancer in people with thyroid nodules. *The Cochrane database* *of systematic reviews*, *3*(3), CD010159. <https://doi.org/10.1002/14651858.CD010159.pub2>
+Yves Rosseel (2012). lavaan: An R Package for Structural Equation Modeling. *Journal of Statistical Software*, 48(2), 1-36. URL <http://www.jstatsoft.org/v48/i02/>
