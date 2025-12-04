@@ -62,14 +62,13 @@ thyro4 =
   mutate(
     elapsed_time_days = as.numeric((Visit_Timestamp - min(Visit_Timestamp)))
   ) %>% 
-  ungroup()
-
-thyro4 = thyro4 %>% 
+  ungroup() %>% 
   group_by(Patient_ID) %>% 
   mutate(
     elapsed_time_prop = elapsed_time_days / max(elapsed_time_days)
   ) %>% 
-  ungroup()
+  ungroup() 
+         
 
 ranking = thyro4 %>% 
   group_by(Patient_ID) %>% 
@@ -77,31 +76,46 @@ ranking = thyro4 %>%
     ave_visitFreq = max(elapsed_time_days) / max(Visit_Number)
   ) %>% 
   mutate(rank_visitFreq = as.factor(ntile(ave_visitFreq, 4))) %>% 
-  ungroup()
+  ungroup() 
 
 thyro4 = thyro4 %>% 
-  left_join(., y = ranking, by = "Patient_ID", keep = F)
+  left_join(., y = ranking, by = "Patient_ID", keep = F) %>% 
+  dplyr::select(-c(ave_visitFreq))
+
+
 ```
 
 
 ```{r Continuous indicators non-transformed}
+L1 = list(
 thyro4 %>%
   ggplot(aes(
     x = Thyroglobulin_Level_Predicted,
   )) +
-  geom_density(alpha = 0.50)
-
+  geom_density(alpha = 0.50,
+               fill = "purple3",
+               adjust = 2) +
+  xlab("Tg not transformed")
+,
 thyro4 %>%
   ggplot(aes(
     x = Calcitonin_Level_Predicted
   )) +
-  geom_density(alpha = 0.50)
-
+  geom_density(alpha = 0.50,
+               fill = "purple3",
+               adjust = 2) +
+  xlab("Ct not transformed")
+,
 thyro4 %>%
   ggplot(aes(
-    x = Hormonal_Change_Rate
+    x = Reverse_T3_Index
   )) +
-  geom_density(alpha = 0.50) 
+  geom_density(alpha = 0.50,
+               fill = "purple3",
+               adjust = 2) +
+  xlab("rT3 as is")
+)
+
 
 ```
 
@@ -111,43 +125,56 @@ m1 <- lm(Thyroglobulin_Level_Predicted + 1e-6 ~ 1, data = thyro4)
 bc1 = MASS::boxcox(m1, plotit = TRUE)
 optLamda_tg = bc1$x[which.max(bc1$y)]
 
+
 m2 <- lm(Calcitonin_Level_Predicted + 1e-6 ~ 1, data = thyro4)
 bc2 = MASS::boxcox(m2, plotit = TRUE)
 optLambda_calc = bc2$x[which.max(bc2$y)]
 
 thyro4 = thyro4 %>% 
   mutate(
-    `bc(tg+1)` = 
-      ((Thyroglobulin_Level_Predicted + 1)^optLamda_tg - 1) / optLamda_tg,
-    `bc(calc+1)` = ((Calcitonin_Level_Predicted + 1)^optLambda_calc -1) / optLambda_calc
+    `TgT` = 
+      ((Thyroglobulin_Level_Predicted + 1e-6)^0.25 - 1) / 0.25,
+    `CtT` = ((Calcitonin_Level_Predicted + 1e-6)^0.25 -1) / 0.25,
+    rT3 = Reverse_T3_Index
   )
+
+rm(optLambda_calc, optLamda_tg, ranking, bc1, bc2, m1, m2)
 ```
 
 
 #### Exploratory Data Analysis 
 
 ```{r Graphs of transformed continuous indicators}
-thyro4 %>%
+L2 =
+list(thyro4 %>%
   ggplot(aes(
-    x = `bc(tg+1)`,
+    x = TgT,
   )) +
   geom_density(alpha = 0.50,
-               fill = "lightblue")
-
+               fill = "lightblue",
+               adjust = 2)+
+    xlab("Tg transformed")
+,
 thyro4 %>%
   ggplot(aes(
-    x = `bc(calc+1)`
+    x = CtT
   )) +
   geom_density(alpha = 0.50,
-               fill = "lightblue")
-
+               fill = "lightblue",
+               adjust = 2)+
+  xlab("Ct transformed")
+,
 thyro4 %>%
   ggplot(aes(
-    x = Hormonal_Change_Rate
+    x = rT3
   )) +
   geom_density(alpha = 0.50,
-               fill = "lightblue") 
+               fill = "lightblue",
+               adjust = 2) +
+  xlab("rT3 as is")
+)
 
+plot_grid(plotlist = c(L1, L2))
 ```
 
 
@@ -155,227 +182,254 @@ thyro4 %>%
 plotList1 = list(
   thyro4 %>%
     ggplot(aes(
-      x = `bc(tg+1)`,
+      x = TgT,
       group = TSH_Risk_Level,
       fill = factor(TSH_Risk_Level)
     )) +
-    geom_density(alpha = 0.20),
+    geom_density(alpha = 0.1),
   
   thyro4 %>%
     ggplot(aes(
-      x = `bc(calc+1)`,
-      group = TSH_Risk_Level,
-      fill = factor(TSH_Risk_Level)
+      x = CtT,
+      group = TSH_Risk_Level
     )) +
-    geom_density(alpha = 0.20),
+    geom_density(alpha = 0.1),
   
   thyro4 %>%
     ggplot(
       aes(
-        x = Hormonal_Change_Rate,
+        x = rT3,
         group = TSH_Risk_Level,
         fill = factor(TSH_Risk_Level)
       )
     ) +
-    geom_density(alpha = 0.20),
+    geom_density(alpha = 0.1),
   
-  thyro4 %>%
-    ggplot(
-      aes(
-        x = `bc(tg+1)`,
-        group = Calcification_Presence,
-        fill = factor(Calcification_Presence)
-      )
-    ) +
-    geom_density(alpha = 0.20),
-  
-  thyro4 %>%
-    ggplot(
-      aes(
-        x = `bc(calc+1)`,
-        group = Calcification_Presence,
-        fill = factor(Calcification_Presence)
-      )
-    ) +
-    geom_density(alpha = 0.20),
-  
-  thyro4 %>%
-    ggplot(
-      aes(
-        x = Hormonal_Change_Rate,
-        group = Calcification_Presence,
-        fill = factor(Calcification_Presence)
-      )
-    ) +
-    geom_density(alpha = 0.20),
-  
-  thyro4 %>%
-    ggplot(
-      aes(
-        x = `bc(tg+1)`,
-        group = Capsular_Invasion_Indicator,
-        fill = factor(Capsular_Invasion_Indicator)
-      )
-    ) +
-    geom_density(alpha = 0.20),
-  
-  thyro4 %>%
-    ggplot(
-      aes(
-        x = `bc(calc+1)`,
-        group = Capsular_Invasion_Indicator,
-        fill = factor(Capsular_Invasion_Indicator)
-      )
-    ) +
-    geom_density(alpha = 0.20),
-  
-  thyro4 %>%
-    ggplot(
-      aes(
-        x = Hormonal_Change_Rate,
-        group = Capsular_Invasion_Indicator,
-        fill = factor(Capsular_Invasion_Indicator)
-      )
-    ) +
-    geom_density(alpha = 0.20)
 )
 
-plot_grid(plotlist = plotList1, nrow = 3)
 ```
 
 
-#### bc(Tg + 1) on bc(Calc + 1), bc(Tg + 1) on Hormonal, and bc(Calc + 1) on Horm. 
+```{r bc(Tg + 1) on bc(Calc + 1), bc(Tg + 1) on Hormonal, and bc(Calc + 1) on Horm. }
+
+list(thyro4 %>% 
+  ggplot(aes(x = rT3, y = TgT)) +
+  geom_point() 
+,
+thyro4 %>% 
+  ggplot(aes(x = TgT, y = CtT)) +
+  geom_point() 
+,
+thyro4 %>% 
+  ggplot(aes(x = CtT, y = rT3)) +
+  geom_point())
+
+list(
+  cor(thyro4$rT3, thyro4$CtT),
+  cor(thyro4$rT3, thyro4$TgT),
+  cor(thyro4$TgT, thyro4$CtT)
+)
+```
+Completely uncorrelated!
+
 ```{r}
-thyro4 %>% 
-  ggplot(aes(x = `bc(tg+1)`, y = `bc(calc+1)`)) +
-  geom_point() 
-
-thyro4 %>% 
-  ggplot(aes(x = `bc(tg+1)`, y = Hormonal_Change_Rate)) +
-  geom_point() 
-
-thyro4 %>% 
-  ggplot(aes(x = `bc(calc+1)`, y = Hormonal_Change_Rate)) +
-  geom_point() 
-
+thyro4 
+  
 ```
 
-```{r Longitudinal trends of bc(tg+1) center across all discrete indicators}
+
+
+
+```{r Longitudinal trends of TgT across all discrete indicators}
 d1 = thyro4 %>%
-  filter(elapsed_time_prop == 0 | elapsed_time_prop == 1) %>%
   group_by(
-    factor(elapsed_time_prop), 
+    Visit_Number,
     TSH_Risk_Level,
     Calcification_Presence,
-    Capsular_Invasion_Indicator
+    Gender,
+    factor(Age > 50),
+    Cancer_Type
     ) %>%
-  summarize(
-    median = median(`bc(tg+1)`),
-    q1 = quantile(`bc(tg+1)`, 0.25),
-    q3 = quantile(`bc(tg+1)`, 0.75)
+  summarise(
+    medianPropTime = median(elapsed_time_prop),
+    q1PropTime = quantile(elapsed_time_prop, 0.25),
+    q3PropTime = quantile(elapsed_time_prop, 0.75),
+    medianTg = median(TgT),
+    q1Tg = quantile(TgT, 0.25),
+    q3Tg = quantile(TgT, 0.75),
+    medianCt = median(CtT),
+    q1CtT = quantile(CtT, 0.25),
+    q3CtT = quantile(CtT, 0.75),
+    medianrT3 = median(rT3),
+    q1rT3 = quantile(rT3, 0.25),
+    q3rT3 = quantile(rT3, 0.75)
   ) %>% 
-  as.data.frame()
+  as.data.frame() 
 
-d1.1 =
+d1.1 = d1 %>% 
+  group_by(Visit_Number) %>% 
+  summarize(medPT =  median(medianPropTime), 
+            medTgT =  median(medianTg), 
+            medCt = median(medianCt),
+            medrT3 = median(medianrT3))
+
+d1.2 = d1 %>% 
+  group_by(Visit_Number, `factor(Age > 50)`) %>% 
+  summarize(medPT =  median(medianPropTime), 
+            medTgT =  median(medianTg), 
+            medCt = median(medianCt),
+            medrT3 = median(medianrT3))
+
+d1.3 = d1 %>% 
+  group_by(Visit_Number, Gender) %>% 
+  summarize(medPT =  median(medianPropTime), 
+            medTgT =  median(medianTg), 
+            medCt = median(medianCt),
+            medrT3 = median(medianrT3))
+
+d1.4 = d1 %>% 
+  group_by(Visit_Number, TSH_Risk_Level) %>% 
+  summarize(medPT =  median(medianPropTime), 
+            medTgT =  median(medianTg), 
+            medCt = median(medianCt),
+            medrT3 = median(medianrT3))
+
+d1.5 = d1 %>% 
+  group_by(Visit_Number, Calcification_Presence) %>% 
+  summarize(medPT =  median(medianPropTime), 
+            medTgT =  median(medianTg), 
+            medCt = median(medianCt),
+            medrT3 = median(medianrT3))
+
+d1.6 = d1 %>% 
+  group_by(Visit_Number, Cancer_Type) %>% 
+  summarize(medPT =  median(medianPropTime), 
+            medTgT =  median(medianTg), 
+            medCt = median(medianCt),
+            medrT3 = median(medianrT3))
+```
+
+``` {r}
+p1 = list(
 d1 %>% 
-  group_by(`factor(elapsed_time_prop)`) %>% 
-  summarize(median = median(median),
-            q1 = median(q1),
-            q3 = median(q3)
-            ) %>% 
-  as.data.frame()
-```
+  ggplot(aes(x = medianPropTime, y = medianTg)) +
+  geom_point() +
+  geom_line(data = d1.1, aes(x = medPT, y = medTgT), linewidth = 1, alpha = 0.3) +
+  geom_line(data = d1.2, aes(x = medPT, y = medTgT, group = `factor(Age > 50)`, 
+                             color = `factor(Age > 50)`))
+,
+d1 %>% 
+  ggplot(aes(x = medianPropTime, y = medianTg)) +
+  geom_point() +
+  geom_line(data = d1.1, aes(x = medPT, y = medTgT), linewidth = 1, alpha = 0.3) +
+  geom_line(data = d1.3, aes(x = medPT, y = medTgT, group = Gender, 
+                             color = Gender))
+,
+d1 %>% 
+  ggplot(aes(x = medianPropTime, y = medianTg)) +
+  geom_point() +
+  geom_line(data = d1.1, aes(x = medPT, y = medTgT), linewidth = 1, alpha = 0.3) +
+  geom_line(data = d1.4, aes(x = medPT, y = medTgT, group = TSH_Risk_Level, 
+                             color = TSH_Risk_Level))
+,
+d1 %>% 
+  ggplot(aes(x = medianPropTime, y = medianTg)) +
+  geom_point() +
+  geom_line(data = d1.1, aes(x = medPT, y = medTgT), linewidth = 1, alpha = 0.3) +
+  geom_line(data = d1.5, aes(x = medPT, y = medTgT, group = Calcification_Presence, 
+                             color = Calcification_Presence))
+,
+d1 %>% 
+  ggplot(aes(x = medianPropTime, y = medianTg)) +
+  geom_point() +
+  geom_line(data = d1.1, aes(x = medPT, y = medTgT), linewidth = 1, alpha = 0.3) +
+  geom_line(data = d1.6, aes(x = medPT, y = medTgT, group = Cancer_Type, 
+                             color = Cancer_Type))
+)
 
-``` {r Graphing the basic trends}
-p1 = 
-thyro4 %>% 
-  filter(elapsed_time_prop > 0 & elapsed_time_prop < 1) %>% 
-  ggplot(aes(x = elapsed_time_prop, y = `bc(tg+1)`)) +
-  geom_point(alpha = 0.01) +
-  geom_pointrange(aes(x = 1,
-                  y = d1$median[2],
-                  ymin = d1$q1[2],
-                  ymax = d1$q3[2]
-                  ),
-                  colour = "steelblue3"
-                  ) +
-  geom_pointrange(aes(x = 0,
-                  y = d1$median[1],
-                  ymin = d1$q1[1],
-                  ymax = d1$q3[1]
-                  ),
-                  colour = "steelblue3"
-                  ) +
-  geom_segment(
-    aes(
-      x = 0,
-      xend = 1,
-      y = d1$median[1],
-      yend = d1$median[2]
-    ),
-    colour = "steelblue3"
-  ) +
-  theme(shape = 1) +
-  theme_minimal() 
 ```
 
 
-```{r Overall trend graphs.}
-ggplot(data = center_Tg, aes(
-  x = Visit_Number,
-  y = med,
-  ymin = q1,
-  ymax = q3
-))
+```{r Longitudinal trends of CtT center across all discrete indicators}
 
-###
-
-ggplot(data = center_Calc, aes(
-  x = Visit_Number,
-  y = med,
-  ymin = q1,
-  ymax = q3,
-  group = rank_visitFreq
-)) +
+p2 = list(
+d1 %>% 
+  ggplot(aes(x = medianPropTime, y = medianCt)) +
   geom_point() +
-  geom_errorbar(width = 0.05) +
-  geom_point(aes(
-    x = Visit_Number,
-    y = min,
-    colour = "steelblue2"
-  )) +
-  geom_point(aes(
-    x = Visit_Number,
-    y = max,
-    colour = "lightpink2"
-  )) +
-  scale_colour_discrete(name = "Extremum", labels = c("Minimum", "Maximum")) +
-  theme_minimal() +
-  facet_wrap(vars(rank_visitFreq))
-
-###
-
-ggplot(data = center_Horm, aes(
-  x = Visit_Number,
-  y = med,
-  ymin = q1,
-  ymax = q3,
-  group = rank_visitFreq
-)) +
+  geom_line(data = d1.1, aes(x = medPT, y = medCt), linewidth = 1, alpha = 0.3) +
+  geom_line(data = d1.2, aes(x = medPT, y = medCt, group = `factor(Age > 50)`, 
+                             color = `factor(Age > 50)`))
+,
+d1 %>% 
+  ggplot(aes(x = medianPropTime, y = medianCt)) +
   geom_point() +
-  geom_errorbar(width = 0.05) +
-  geom_point(aes(
-    x = Visit_Number,
-    y = min,
-    colour = "steelblue2"
-  )) +
-  geom_point(aes(
-    x = Visit_Number,
-    y = max,
-    colour = "lightpink2"
-  )) +
-  scale_colour_discrete(name = "Extremum", labels = c("Minimum", "Maximum")) +
-  theme_minimal() +
-  facet_wrap(vars(rank_visitFreq))
+  geom_line(data = d1.1, aes(x = medPT, y = medCt), linewidth = 1, alpha = 0.3) +
+  geom_line(data = d1.3, aes(x = medPT, y = medCt, group = Gender, 
+                             color = Gender))
+,
+d1 %>% 
+  ggplot(aes(x = medianPropTime, y = medianCt)) +
+  geom_point() +
+  geom_line(data = d1.1, aes(x = medPT, y = medCt), linewidth = 1, alpha = 0.3) +
+  geom_line(data = d1.4, aes(x = medPT, y = medCt, group = TSH_Risk_Level, 
+                             color = TSH_Risk_Level))
+,
+d1 %>% 
+  ggplot(aes(x = medianPropTime, y = medianCt)) +
+  geom_point() +
+  geom_line(data = d1.1, aes(x = medPT, y = medCt), linewidth = 1, alpha = 0.3) +
+  geom_line(data = d1.5, aes(x = medPT, y = medCt, group = Calcification_Presence, 
+                             color = Calcification_Presence))
+,
+d1 %>% 
+  ggplot(aes(x = medianPropTime, y = medianCt)) +
+  geom_point() +
+  geom_line(data = d1.1, aes(x = medPT, y = medCt), linewidth = 1, alpha = 0.3) +
+  geom_line(data = d1.6, aes(x = medPT, y = medCt, group = Cancer_Type, 
+                             color = Cancer_Type))
+)
+
+```
+
+
+```{r Longitudinal trends of rT3 center across all discrete indicators}
+
+p3 = list(
+d1 %>% 
+  ggplot(aes(x = medianPropTime, y = medianrT3)) +
+  geom_point() +
+  geom_line(data = d1.1, aes(x = medPT, y = medrT3), linewidth = 1, alpha = 0.3) +
+  geom_line(data = d1.2, aes(x = medPT, y = medrT3, group = `factor(Age > 50)`, 
+                             color = `factor(Age > 50)`))
+,
+d1 %>% 
+  ggplot(aes(x = medianPropTime, y = medianrT3)) +
+  geom_point() +
+  geom_line(data = d1.1, aes(x = medPT, y = medrT3), linewidth = 1, alpha = 0.3) +
+  geom_line(data = d1.3, aes(x = medPT, y = medrT3, group = Gender, 
+                             color = Gender))
+,
+d1 %>% 
+  ggplot(aes(x = medianPropTime, y = medianrT3)) +
+  geom_point() +
+  geom_line(data = d1.1, aes(x = medPT, y = medrT3), linewidth = 1, alpha = 0.3) +
+  geom_line(data = d1.4, aes(x = medPT, y = medrT3, group = TSH_Risk_Level, 
+                             color = TSH_Risk_Level))
+,
+d1 %>% 
+  ggplot(aes(x = medianPropTime, y = medianrT3)) +
+  geom_point() +
+  geom_line(data = d1.1, aes(x = medPT, y = medrT3), linewidth = 1, alpha = 0.3) +
+  geom_line(data = d1.5, aes(x = medPT, y = medrT3, group = Calcification_Presence, 
+                             color = Calcification_Presence))
+,
+d1 %>% 
+  ggplot(aes(x = medianPropTime, y = medianrT3)) +
+  geom_point() +
+  geom_line(data = d1.1, aes(x = medPT, y = medrT3), linewidth = 1, alpha = 0.3) +
+  geom_line(data = d1.6, aes(x = medPT, y = medrT3, group = Cancer_Type, 
+                             color = Cancer_Type))
+)
+
 ```
 
