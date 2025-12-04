@@ -178,39 +178,7 @@ plot_grid(plotlist = c(L1, L2))
 ```
 
 
-```{r Graphs of transformed continuous indicators w.r.t. discrete indicators}
-plotList1 = list(
-  thyro4 %>%
-    ggplot(aes(
-      x = TgT,
-      group = TSH_Risk_Level,
-      fill = factor(TSH_Risk_Level)
-    )) +
-    geom_density(alpha = 0.1),
-  
-  thyro4 %>%
-    ggplot(aes(
-      x = CtT,
-      group = TSH_Risk_Level
-    )) +
-    geom_density(alpha = 0.1),
-  
-  thyro4 %>%
-    ggplot(
-      aes(
-        x = rT3,
-        group = TSH_Risk_Level,
-        fill = factor(TSH_Risk_Level)
-      )
-    ) +
-    geom_density(alpha = 0.1),
-  
-)
-
-```
-
-
-```{r bc(Tg + 1) on bc(Calc + 1), bc(Tg + 1) on Hormonal, and bc(Calc + 1) on Horm. }
+```{r Assessing correlation among response variables}
 
 list(thyro4 %>% 
   ggplot(aes(x = rT3, y = TgT)) +
@@ -232,14 +200,65 @@ list(
 ```
 Completely uncorrelated!
 
-```{r}
-thyro4 
-  
+
+#### Explore the relationship between predictors and responses. Picking covariates of interest based on backward selection. 
+
+```{r TgT regressed on all covariates}
+data_tg = thyro4 %>% dplyr::select(-c(Patient_ID, Thyroglobulin_Level_Predicted))
+
+mlr_tg = lm(formula = TgT ~ ., data_tg)
+
+summary(mlr_tg)
+
+step(lm(TgT ~ 1, data = data_tg), direction = "forward", scope = mlr_tg, trace = 0) 
+
+step(mlr_tg, direction = "backward", trace = 0) # A very time-consuming command. 
+# Disabled output, so it's running in background. Final call is the output
+
+mlr_tgStep = lm(formula = TgT ~ Visit_Number + Daily_Steps + Sleep_Patterns + 
+    elapsed_time_prop + Body_Temperature, data = data_tg)
+
+summary(mlr_tgStep)
+```
+
+``` {r, ct regressed on all covariates}
+data_ct = thyro4 %>% dplyr::select(-c(Patient_ID, Calcitonin_Level_Predicted)) 
+mlr_ct = lm(formula = CtT ~ ., data = data_ct)
+
+summary(mlr_ct)
+
+step(mlr_ct, direction = "backward", trace = 0) # A very time-consuming command. 
+# Disabled output, so it's running in background. Final call is below. 
+
+mlr_ctStep = lm(formula = CtT ~ Visit_Number + Visit_Timestamp + Scan_Type + 
+    Vascularity_Score + Capsular_Invasion_Indicator + TSH_Risk_Level, 
+    data = data_ct)
+
+summary(mlr_ctStep)
+
 ```
 
 
+``` {r, rT3 regressed on all covariates}
+data_rt3 = thyro4 %>% dplyr::select(-c(Patient_ID, Reverse_T3_Index)) 
+mlr_rT3 = lm(formula = rT3 ~ ., data = data_rt3)
+
+summary(mlr_rT3)
+
+# step(mlr_rT3, direction = "backward", trace = 0) # A very time-consuming command. 
+## Disabled output, so it's running in background. Final call is the output
+
+mlr_rT3Step = lm(formula = rT3 ~ Scan_Type + Weight_kg + Family_History + Smoking_Status + 
+    Nodule_Size_mm + Vascularity_Score + Texture_Entropy + TPOAb_Probability + 
+    Symptom_Onset_Duration + Hormonal_Change_Rate + Medication_Adherence, 
+    data = data_rt3)
+
+summary(mlr_rT3Step)
+
+```
 
 
+#### With categorical covariates of interest, graph temporal trends. 
 ```{r Longitudinal trends of TgT across all discrete indicators}
 d1 = thyro4 %>%
   group_by(
@@ -309,7 +328,7 @@ d1.6 = d1 %>%
             medrT3 = median(medianrT3))
 ```
 
-``` {r}
+``` {r Longitudinal trends of TgT center across all discrete indicators}
 p1 = list(
 d1 %>% 
   ggplot(aes(x = medianPropTime, y = medianTg)) +
@@ -432,4 +451,10 @@ d1 %>%
 )
 
 ```
+
+Saving dataset.
+```{r}
+write.csv(thyro4, file = "thyro4.csv", row.names = FALSE) 
+```
+
 
