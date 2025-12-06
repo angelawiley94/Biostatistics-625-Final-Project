@@ -6,10 +6,10 @@ parHlme = function(
     subject = "ID",
     ng,
     ncores = parallel::detectCores() - 1,
-    seeds = 1:12
+    seeds = 1:4
 ) {
   start.time = Sys.time()
-  if (ng == 1) {
+  if (ng == 1) { 
     return(
       hlme(
         fixed   = fixedi,
