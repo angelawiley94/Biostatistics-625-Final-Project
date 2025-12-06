@@ -46,7 +46,8 @@ parHlme = function(
   }
   
   message("The valid initial model is set!")
-  message("Runtime: ", round(Sys.time() - start.time, 3), " seconds")
+  lap.time1 = Sys.time()
+  message("Runtime: ", round(lap.time1 - start.time, 3), " seconds")
   
   cl = parallel::makeCluster(ncores)
   parallel::clusterEvalQ(cl, library(lcmm))
@@ -82,11 +83,12 @@ parHlme = function(
   if (length(good) == 0)
     stop("All seeds failed for ng = ", ng)
   
-  message("Runtime: ", round(Sys.time() - start.time, 3), " seconds")
+  end.time = Sys.time()
+  message("Runtime: ", round(end.time - start.time, 3), " seconds")
   return(parHlme_results = list(
     models = good,
     `Initial model` = init_model,
-    runtime = round(Sys.time() - start.time, 3)
+    runtime = round(end.time - start.time, 3)
   )
   )
 }
