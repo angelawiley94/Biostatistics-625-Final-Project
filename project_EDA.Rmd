@@ -37,6 +37,8 @@ library(tidyverse)
 library(cowplot)
 library(MASS)
 library(lavaan)
+library(parallel)
+library(glmnet)
 
 thyro <- read_csv("~/Desktop/UM/BIOSTAT625/Project//ThyroTrack-MV Processed Dataset.csv", show_col_types = F)
 ```
@@ -187,56 +189,71 @@ Completely uncorrelated!
 #### Explore the relationship between predictors and responses. Picking covariates of interest based on backward selection. 
 
 ```{r TgT regressed on all covariates}
-data_tg = thyro4 %>% dplyr::select(-c(Patient_ID, Thyroglobulin_Level_Predicted))
+data_tg = thyro4 %>% dplyr::select(-c(Patient_ID, Visit_Number, Thyroglobulin_Level_Predicted, Visit_Timestamp))
 
-mlr_tg = lm(formula = TgT ~ ., data_tg)
+x = data_tg %>% dplyr::select(-TgT) %>% data.frame() %>% as.matrix()
+y = data_tg$TgT
 
-summary(mlr_tg)
+cv_lasso <- cv.glmnet(x, y, alpha = 1) # alpha=1 for LASSO
+plot(cv_lasso) # Shows MSE vs. log(lambda)
 
-step(lm(TgT ~ 1, data = data_tg), direction = "forward", scope = mlr_tg, trace = 0) 
+best_lambda <- cv_lasso$lambda.min
+lasso_model <- glmnet(x, y, alpha = 1, lambda = best_lambda)
+coef=(coef(lasso_model)[,1])
+coefName = names(coef)
+interestTgT = coefName[which(coef != 0)] 
 
-step(mlr_tg, direction = "backward", trace = 0) # A very time-consuming command. 
-# Disabled output, so it's running in background. Final call is the output
 
-mlr_tgStep = lm(formula = TgT ~ Visit_Number + Daily_Steps + Sleep_Patterns + 
-    elapsed_time_prop + Body_Temperature, data = data_tg)
-
-summary(mlr_tgStep)
 ```
 
 ``` {r, ct regressed on all covariates}
-data_ct = thyro4 %>% dplyr::select(-c(Patient_ID, Calcitonin_Level_Predicted)) 
-mlr_ct = lm(formula = CtT ~ ., data = data_ct)
+data_ct = thyro4 %>% dplyr::select(-c(Patient_ID, Calcitonin_Level_Predicted, Visit_Number, Visit_Timestamp)) 
 
-summary(mlr_ct)
+x = data_ct %>% dplyr::select(-CtT) %>% data.frame() %>% as.matrix()
+y = data_ct$CtT
 
-step(mlr_ct, direction = "backward", trace = 0) # A very time-consuming command. 
-# Disabled output, so it's running in background. Final call is below. 
+cv_lasso <- cv.glmnet(x, y, alpha = 1) # alpha=1 for LASSO
+plot(cv_lasso) # Shows MSE vs. log(lambda)
 
-mlr_ctStep = lm(formula = CtT ~ Visit_Number + Visit_Timestamp + Scan_Type + 
-    Vascularity_Score + Capsular_Invasion_Indicator + TSH_Risk_Level, 
-    data = data_ct)
+best_lambda <- cv_lasso$lambda.min
+lasso_model <- glmnet(x, y, alpha = 1, lambda = best_lambda)
+coef=(coef(lasso_model)[,1])
+coefName = names(coef)
+interestCtT = coefName[which(coef != 0)]
 
-summary(mlr_ctStep)
 
 ```
 
 
 ``` {r, rT3 regressed on all covariates}
-data_rt3 = thyro4 %>% dplyr::select(-c(Patient_ID, Reverse_T3_Index)) 
-mlr_rT3 = lm(formula = rT3 ~ ., data = data_rt3)
+data_rT3 = thyro4 %>% dplyr::select(-c(Patient_ID, Reverse_T3_Index, Visit_Number, Visit_Timestamp)) 
+x = data_rT3 %>% dplyr::select(-rT3) %>% data.frame() %>% as.matrix()
+y = data_rT3$rT3
 
-summary(mlr_rT3)
+cv_lasso <- cv.glmnet(x, y, alpha = 1) # alpha=1 for LASSO
+plot(cv_lasso) # Shows MSE vs. log(lambda)
 
-# step(mlr_rT3, direction = "backward", trace = 0) # A very time-consuming command. 
-## Disabled output, so it's running in background. Final call is the output
+best_lambda <- cv_lasso$lambda.min
+lasso_model <- glmnet(x, y, alpha = 1, lambda = best_lambda)
+coef=(coef(lasso_model)[,1])
+coefName = names(coef)
+interestrT3 = coefName[which(coef != 0)]
 
-mlr_rT3Step = lm(formula = rT3 ~ Scan_Type + Weight_kg + Family_History + Smoking_Status + 
-    Nodule_Size_mm + Vascularity_Score + Texture_Entropy + TPOAb_Probability + 
-    Symptom_Onset_Duration + Hormonal_Change_Rate + Medication_Adherence, 
-    data = data_rt3)
 
-summary(mlr_rT3Step)
+```
+
+```{r}
+D1 = data.frame(RV = c("Tg", "Ct", "rT3", "rT3", "rT3", "rT3"), 
+                `Factors of Interest` = c(
+                  paste0(interestTgT[-1], collapse = ", "),
+                  paste0(interestCtT[-1], collapse = ", "),
+                  paste0(interestrT3[-1][1:3], collapse = ", "),
+                  paste0(interestrT3[-1][4:6], collapse = ", "),
+                  paste0(interestrT3[-1][7:9], collapse = ", "),
+                  paste0(interestrT3[-1][10:12], collapse = ", ")
+                  )
+                )
+
 
 ```
 
