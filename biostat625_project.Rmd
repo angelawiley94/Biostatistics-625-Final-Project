@@ -1,0 +1,134 @@
+---
+title: "LGA"
+output: html_notebook
+---
+
+#### Variable Descriptions
+```{r Downloading packages and Importing Dataset}
+library(readr)
+library(ggplot2)
+library(purrr)
+library(tidyverse)
+library(cowplot)
+library(MASS)
+library(lcmm)
+library(parallel)
+
+ncores <- detectCores() - 1
+
+thyro4 <- read_csv("~/Desktop/UM/BIOSTAT625/Project//thyro4.csv", show_col_types = F)
+
+dTgT = thyro4 %>%
+  mutate(time = elapsed_time_days) %>% 
+  dplyr::select(-c(Patient_ID, elapsed_time_days, Visit_Number, Visit_Timestamp, Thyroglobulin_Level_Predicted))
+
+dCtT = thyro4 %>%
+  mutate(time = elapsed_time_days) %>% 
+  dplyr::select(-c(Patient_ID, elapsed_time_days, Visit_Number, Visit_Timestamp, Calcitonin_Level_Predicted))
+
+drT3 = thyro4  %>%
+  mutate(time = elapsed_time_days) %>% 
+  dplyr::select(-c(Patient_ID, elapsed_time_days, Visit_Number, Visit_Timestamp, Reverse_T3_Index))
+```
+
+
+
+## Latent Basic Modeling using lcmm package
+#### Single Latent Basis Modeling
+```{r Latent Basis on Tg}
+m1TgT <- hlme(
+  fixed = TgT ~ time,
+  random = ~ time,
+  subject = "ID",
+  ng = 1,
+  data = dTgT
+)
+```
+
+
+```{r Latent Basis on ct}
+m1CtT = hlme(
+  fixed = CtT ~ time,
+  random = ~ 1,
+  subject = "ID",
+  ng = 1,
+  data = dCtT
+)
+
+```
+
+```{r Latent Basis on rT3}
+system.time(
+hlme(
+  fixed = rT3 ~ time,
+  random = ~ 1,
+  subject = "ID",
+  ng = 1,
+  data = drT3
+)
+)
+
+m1rT3 = hlme(
+  fixed = rT3 ~ time,
+  random = ~ 1,
+  subject = "ID",
+  ng = 1,
+  data = drT3
+)
+```
+
+#### Start up parallel function for mixture latent growth modeling. 
+
+```{r}
+parHlme <- function(
+    ngi, 
+    modelb,
+    data, 
+    fixedi, 
+    randomi, 
+    mixturei
+    ) {
+
+  cl <- makeCluster(ncores)
+  clusterEvalQ(cl, library(lcmm))
+  clusterExport(cl, c("data", "modelb", "fixedi", "randomi", "mixturei", "ngi"))
+  
+  seeds <- 1:12
+  models <- parLapply(cl, seeds, function(s) {
+    set.seed(s)
+    hlme(
+      fixed = fixedi,
+      random = randomi,
+      mixture = mixturei,
+      subject = "ID",
+      ng = ngi,
+      data = data,
+      B = modelb
+    )
+  })
+  
+  stopCluster(cl)
+  
+  logliks <- sapply(models, function(m) m$loglik)
+  best_index <- which.max(logliks)
+  return(models[[best_index]])
+}
+```
+
+
+
+```{r Run parHlme on TgT}
+m2TgT = parHlme(
+  data = dTgT,
+  modelb = m1TgT,
+  ngi = 2,
+  mixturei = ~ time,
+  randomi = ~ time,
+  fixedi = TgT ~ time
+)
+```
+
+
+
+
+

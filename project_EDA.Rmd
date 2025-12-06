@@ -1,0 +1,460 @@
+---
+title: "EDA"
+output: html_notebook
+---
+
+## Variable Descriptions
+
+Patient_ID Unique anonymized identifier per patient
+Visit_Number Sequential clinical visit index
+Visit_Timestamp Date of each visit
+Scan_Type Type of scan performed (Ultrasound, FNA, Elastography)
+Age, Gender, Height, Weight, BMI Basic demographics and body metrics
+Family_History Binary indicator for thyroid disease in family history
+Smoking_Status Categorical: Smoker, Non-Smoker, Former Smoker
+Radiation_Exposure Prior exposure to radiation therapy or sources
+Nodule_Size_mm, Margin_Sharpness, Shape_Score, Echogenicity_Index Radiomic features from scans
+
+Calcification_Presence, Capsular_Invasion_Indicator Structural indicators linked to malignancy
+
+Vascularity_Score, Texture_Entropy, Asymmetry_Score Advanced scan-derived imaging biomarkers
+
+TSH_Risk_Level, TPOAb_Probability, Thyroglobulin_Level_Predicted, Calcitonin_Level_Predicted, Reverse_T3_Index Hormonal indicators
+Heart_Rate, Daily_Steps, Sleep_Patterns, Body_Temperature, Pulse_Oximetry Smart device vitals
+
+Stress_Level, Symptom_Onset_Duration, Hormonal_Change_Rate, Medication_Adherence Behavioral and progression indicators
+
+Diagnosis_Label Binary classification (0: Benign, 1: Malignant)
+Cancer_Type Categorical subtype (e.g., Papillary, Follicular, Medullary, etc.)
+
+Recurrence_Risk Binary risk estimation for recurrence likelihood
+
+```{r Downloading packages and Importing Dataset}
+library(readr)
+library(ggplot2)
+library(purrr)
+library(tidyverse)
+library(cowplot)
+library(MASS)
+library(lavaan)
+library(parallel)
+library(glmnet)
+
+thyro <- read_csv("~/Desktop/UM/BIOSTAT625/Project//ThyroTrack-MV Processed Dataset.csv", show_col_types = F)
+```
+
+``` {r Data manipulation and cleaning}
+patient_freq = 
+  thyro %>% 
+  group_by(Patient_ID) %>% 
+  summarize(n = n()) 
+
+patient_freq4 = patient_freq %>% 
+  filter(n >= 4)
+
+patient_freq4 = patient_freq4$Patient_ID
+
+thyro4 =
+  thyro %>% 
+  filter(Patient_ID %in% patient_freq4) %>% 
+  group_by(Patient_ID) %>% 
+  mutate(
+    across(c(4, 6, 10, 11, 12, 17, 21, 22, 35, 36, 37, 38) - 1, as.factor)
+  )  %>% 
+  mutate(
+    elapsed_time_days = as.numeric((Visit_Timestamp - min(Visit_Timestamp)))
+  ) %>% 
+  ungroup() %>% 
+  mutate(ID = as.numeric(factor(Patient_ID)))
+
+
+```
+
+
+```{r Continuous indicators non-transformed}
+L1 = list(
+thyro4 %>%
+  ggplot(aes(
+    x = Thyroglobulin_Level_Predicted,
+  )) +
+  geom_density(alpha = 0.50,
+               fill = "purple3",
+               adjust = 2) +
+  xlab("Tg not transformed")
+,
+thyro4 %>%
+  ggplot(aes(
+    x = Calcitonin_Level_Predicted
+  )) +
+  geom_density(alpha = 0.50,
+               fill = "purple3",
+               adjust = 2) +
+  xlab("Ct not transformed")
+,
+thyro4 %>%
+  ggplot(aes(
+    x = Reverse_T3_Index
+  )) +
+  geom_density(alpha = 0.50,
+               fill = "purple3",
+               adjust = 2) +
+  xlab("rT3 as is")
+)
+
+
+```
+
+ 
+```{r Box Cox transforming continuous indicators}
+m1 <- lm(Thyroglobulin_Level_Predicted + 1e-6 ~ 1, data = thyro4)
+bc1 = MASS::boxcox(m1, plotit = TRUE)
+optLamda_tg = bc1$x[which.max(bc1$y)]
+
+
+m2 <- lm(Calcitonin_Level_Predicted + 1e-6 ~ 1, data = thyro4)
+bc2 = MASS::boxcox(m2, plotit = TRUE)
+optLambda_calc = bc2$x[which.max(bc2$y)]
+
+thyro4 = thyro4 %>% 
+  mutate(
+    `TgT` = 
+      ((Thyroglobulin_Level_Predicted + 1e-6)^0.25 - 1) / 0.25,
+    `CtT` = ((Calcitonin_Level_Predicted + 1e-6)^0.25 -1) / 0.25,
+    rT3 = Reverse_T3_Index
+  )
+
+rm(optLambda_calc, optLamda_tg, bc1, bc2, m1, m2)
+```
+
+
+#### Exploratory Data Analysis 
+
+```{r Graphs of transformed continuous indicators}
+L2 =
+list(thyro4 %>%
+  ggplot(aes(
+    x = TgT,
+  )) +
+  geom_density(alpha = 0.50,
+               fill = "lightblue",
+               adjust = 2)+
+    xlab("Tg transformed")
+,
+thyro4 %>%
+  ggplot(aes(
+    x = CtT
+  )) +
+  geom_density(alpha = 0.50,
+               fill = "lightblue",
+               adjust = 2)+
+  xlab("Ct transformed")
+,
+thyro4 %>%
+  ggplot(aes(
+    x = rT3
+  )) +
+  geom_density(alpha = 0.50,
+               fill = "lightblue",
+               adjust = 2) +
+  xlab("rT3 as is")
+)
+
+plot_grid(plotlist = c(L1, L2))
+```
+
+
+```{r Assessing correlation among response variables}
+
+list(thyro4 %>% 
+  ggplot(aes(x = rT3, y = TgT)) +
+  geom_point() 
+,
+thyro4 %>% 
+  ggplot(aes(x = TgT, y = CtT)) +
+  geom_point() 
+,
+thyro4 %>% 
+  ggplot(aes(x = CtT, y = rT3)) +
+  geom_point())
+
+list(
+  cor(thyro4$rT3, thyro4$CtT),
+  cor(thyro4$rT3, thyro4$TgT),
+  cor(thyro4$TgT, thyro4$CtT)
+)
+```
+Completely uncorrelated!
+
+
+#### Explore the relationship between predictors and responses. Picking covariates of interest based on backward selection. 
+
+```{r TgT regressed on all covariates}
+data_tg = thyro4 %>% dplyr::select(-c(Patient_ID, Visit_Number, Thyroglobulin_Level_Predicted, Visit_Timestamp))
+
+x = data_tg %>% dplyr::select(-TgT) %>% data.frame() %>% as.matrix()
+y = data_tg$TgT
+
+cv_lasso <- cv.glmnet(x, y, alpha = 1) # alpha=1 for LASSO
+plot(cv_lasso) # Shows MSE vs. log(lambda)
+
+best_lambda <- cv_lasso$lambda.min
+lasso_model <- glmnet(x, y, alpha = 1, lambda = best_lambda)
+coef=(coef(lasso_model)[,1])
+coefName = names(coef)
+interestTgT = coefName[which(coef != 0)] 
+
+
+```
+
+``` {r, ct regressed on all covariates}
+data_ct = thyro4 %>% dplyr::select(-c(Patient_ID, Calcitonin_Level_Predicted, Visit_Number, Visit_Timestamp)) 
+
+x = data_ct %>% dplyr::select(-CtT) %>% data.frame() %>% as.matrix()
+y = data_ct$CtT
+
+cv_lasso <- cv.glmnet(x, y, alpha = 1) # alpha=1 for LASSO
+plot(cv_lasso) # Shows MSE vs. log(lambda)
+
+best_lambda <- cv_lasso$lambda.min
+lasso_model <- glmnet(x, y, alpha = 1, lambda = best_lambda)
+coef=(coef(lasso_model)[,1])
+coefName = names(coef)
+interestCtT = coefName[which(coef != 0)]
+
+
+```
+
+
+``` {r, rT3 regressed on all covariates}
+data_rT3 = thyro4 %>% dplyr::select(-c(Patient_ID, Reverse_T3_Index, Visit_Number, Visit_Timestamp)) 
+x = data_rT3 %>% dplyr::select(-rT3) %>% data.frame() %>% as.matrix()
+y = data_rT3$rT3
+
+cv_lasso <- cv.glmnet(x, y, alpha = 1) # alpha=1 for LASSO
+plot(cv_lasso) # Shows MSE vs. log(lambda)
+
+best_lambda <- cv_lasso$lambda.min
+lasso_model <- glmnet(x, y, alpha = 1, lambda = best_lambda)
+coef=(coef(lasso_model)[,1])
+coefName = names(coef)
+interestrT3 = coefName[which(coef != 0)]
+
+
+```
+
+```{r}
+D1 = data.frame(RV = c("Tg", "Ct", "rT3", "rT3", "rT3", "rT3"), 
+                `Factors of Interest` = c(
+                  paste0(interestTgT[-1], collapse = ", "),
+                  paste0(interestCtT[-1], collapse = ", "),
+                  paste0(interestrT3[-1][1:3], collapse = ", "),
+                  paste0(interestrT3[-1][4:6], collapse = ", "),
+                  paste0(interestrT3[-1][7:9], collapse = ", "),
+                  paste0(interestrT3[-1][10:12], collapse = ", ")
+                  )
+                )
+
+
+```
+
+
+#### With categorical covariates of interest, graph temporal trends. 
+```{r Longitudinal trends of TgT across all discrete indicators}
+d1 = thyro4 %>%
+  group_by(
+    Visit_Number,
+    TSH_Risk_Level,
+    Calcification_Presence,
+    Gender,
+    factor(Age > 50),
+    Cancer_Type
+    ) %>%
+  summarise(
+    medianPropTime = median(elapsed_time_prop),
+    q1PropTime = quantile(elapsed_time_prop, 0.25),
+    q3PropTime = quantile(elapsed_time_prop, 0.75),
+    medianTg = median(TgT),
+    q1Tg = quantile(TgT, 0.25),
+    q3Tg = quantile(TgT, 0.75),
+    medianCt = median(CtT),
+    q1CtT = quantile(CtT, 0.25),
+    q3CtT = quantile(CtT, 0.75),
+    medianrT3 = median(rT3),
+    q1rT3 = quantile(rT3, 0.25),
+    q3rT3 = quantile(rT3, 0.75)
+  ) %>% 
+  as.data.frame() 
+
+d1.1 = d1 %>% 
+  group_by(Visit_Number) %>% 
+  summarize(medPT =  median(medianPropTime), 
+            medTgT =  median(medianTg), 
+            medCt = median(medianCt),
+            medrT3 = median(medianrT3))
+
+d1.2 = d1 %>% 
+  group_by(Visit_Number, `factor(Age > 50)`) %>% 
+  summarize(medPT =  median(medianPropTime), 
+            medTgT =  median(medianTg), 
+            medCt = median(medianCt),
+            medrT3 = median(medianrT3))
+
+d1.3 = d1 %>% 
+  group_by(Visit_Number, Gender) %>% 
+  summarize(medPT =  median(medianPropTime), 
+            medTgT =  median(medianTg), 
+            medCt = median(medianCt),
+            medrT3 = median(medianrT3))
+
+d1.4 = d1 %>% 
+  group_by(Visit_Number, TSH_Risk_Level) %>% 
+  summarize(medPT =  median(medianPropTime), 
+            medTgT =  median(medianTg), 
+            medCt = median(medianCt),
+            medrT3 = median(medianrT3))
+
+d1.5 = d1 %>% 
+  group_by(Visit_Number, Calcification_Presence) %>% 
+  summarize(medPT =  median(medianPropTime), 
+            medTgT =  median(medianTg), 
+            medCt = median(medianCt),
+            medrT3 = median(medianrT3))
+
+d1.6 = d1 %>% 
+  group_by(Visit_Number, Cancer_Type) %>% 
+  summarize(medPT =  median(medianPropTime), 
+            medTgT =  median(medianTg), 
+            medCt = median(medianCt),
+            medrT3 = median(medianrT3))
+```
+
+``` {r Longitudinal trends of TgT center across all discrete indicators}
+p1 = list(
+d1 %>% 
+  ggplot(aes(x = medianPropTime, y = medianTg)) +
+  geom_point() +
+  geom_line(data = d1.1, aes(x = medPT, y = medTgT), linewidth = 1, alpha = 0.3) +
+  geom_line(data = d1.2, aes(x = medPT, y = medTgT, group = `factor(Age > 50)`, 
+                             color = `factor(Age > 50)`))
+,
+d1 %>% 
+  ggplot(aes(x = medianPropTime, y = medianTg)) +
+  geom_point() +
+  geom_line(data = d1.1, aes(x = medPT, y = medTgT), linewidth = 1, alpha = 0.3) +
+  geom_line(data = d1.3, aes(x = medPT, y = medTgT, group = Gender, 
+                             color = Gender))
+,
+d1 %>% 
+  ggplot(aes(x = medianPropTime, y = medianTg)) +
+  geom_point() +
+  geom_line(data = d1.1, aes(x = medPT, y = medTgT), linewidth = 1, alpha = 0.3) +
+  geom_line(data = d1.4, aes(x = medPT, y = medTgT, group = TSH_Risk_Level, 
+                             color = TSH_Risk_Level))
+,
+d1 %>% 
+  ggplot(aes(x = medianPropTime, y = medianTg)) +
+  geom_point() +
+  geom_line(data = d1.1, aes(x = medPT, y = medTgT), linewidth = 1, alpha = 0.3) +
+  geom_line(data = d1.5, aes(x = medPT, y = medTgT, group = Calcification_Presence, 
+                             color = Calcification_Presence))
+,
+d1 %>% 
+  ggplot(aes(x = medianPropTime, y = medianTg)) +
+  geom_point() +
+  geom_line(data = d1.1, aes(x = medPT, y = medTgT), linewidth = 1, alpha = 0.3) +
+  geom_line(data = d1.6, aes(x = medPT, y = medTgT, group = Cancer_Type, 
+                             color = Cancer_Type))
+)
+
+```
+
+
+```{r Longitudinal trends of CtT center across all discrete indicators}
+
+p2 = list(
+d1 %>% 
+  ggplot(aes(x = medianPropTime, y = medianCt)) +
+  geom_point() +
+  geom_line(data = d1.1, aes(x = medPT, y = medCt), linewidth = 1, alpha = 0.3) +
+  geom_line(data = d1.2, aes(x = medPT, y = medCt, group = `factor(Age > 50)`, 
+                             color = `factor(Age > 50)`))
+,
+d1 %>% 
+  ggplot(aes(x = medianPropTime, y = medianCt)) +
+  geom_point() +
+  geom_line(data = d1.1, aes(x = medPT, y = medCt), linewidth = 1, alpha = 0.3) +
+  geom_line(data = d1.3, aes(x = medPT, y = medCt, group = Gender, 
+                             color = Gender))
+,
+d1 %>% 
+  ggplot(aes(x = medianPropTime, y = medianCt)) +
+  geom_point() +
+  geom_line(data = d1.1, aes(x = medPT, y = medCt), linewidth = 1, alpha = 0.3) +
+  geom_line(data = d1.4, aes(x = medPT, y = medCt, group = TSH_Risk_Level, 
+                             color = TSH_Risk_Level))
+,
+d1 %>% 
+  ggplot(aes(x = medianPropTime, y = medianCt)) +
+  geom_point() +
+  geom_line(data = d1.1, aes(x = medPT, y = medCt), linewidth = 1, alpha = 0.3) +
+  geom_line(data = d1.5, aes(x = medPT, y = medCt, group = Calcification_Presence, 
+                             color = Calcification_Presence))
+,
+d1 %>% 
+  ggplot(aes(x = medianPropTime, y = medianCt)) +
+  geom_point() +
+  geom_line(data = d1.1, aes(x = medPT, y = medCt), linewidth = 1, alpha = 0.3) +
+  geom_line(data = d1.6, aes(x = medPT, y = medCt, group = Cancer_Type, 
+                             color = Cancer_Type))
+)
+
+```
+
+
+```{r Longitudinal trends of rT3 center across all discrete indicators}
+
+p3 = list(
+d1 %>% 
+  ggplot(aes(x = medianPropTime, y = medianrT3)) +
+  geom_point() +
+  geom_line(data = d1.1, aes(x = medPT, y = medrT3), linewidth = 1, alpha = 0.3) +
+  geom_line(data = d1.2, aes(x = medPT, y = medrT3, group = `factor(Age > 50)`, 
+                             color = `factor(Age > 50)`))
+,
+d1 %>% 
+  ggplot(aes(x = medianPropTime, y = medianrT3)) +
+  geom_point() +
+  geom_line(data = d1.1, aes(x = medPT, y = medrT3), linewidth = 1, alpha = 0.3) +
+  geom_line(data = d1.3, aes(x = medPT, y = medrT3, group = Gender, 
+                             color = Gender))
+,
+d1 %>% 
+  ggplot(aes(x = medianPropTime, y = medianrT3)) +
+  geom_point() +
+  geom_line(data = d1.1, aes(x = medPT, y = medrT3), linewidth = 1, alpha = 0.3) +
+  geom_line(data = d1.4, aes(x = medPT, y = medrT3, group = TSH_Risk_Level, 
+                             color = TSH_Risk_Level))
+,
+d1 %>% 
+  ggplot(aes(x = medianPropTime, y = medianrT3)) +
+  geom_point() +
+  geom_line(data = d1.1, aes(x = medPT, y = medrT3), linewidth = 1, alpha = 0.3) +
+  geom_line(data = d1.5, aes(x = medPT, y = medrT3, group = Calcification_Presence, 
+                             color = Calcification_Presence))
+,
+d1 %>% 
+  ggplot(aes(x = medianPropTime, y = medianrT3)) +
+  geom_point() +
+  geom_line(data = d1.1, aes(x = medPT, y = medrT3), linewidth = 1, alpha = 0.3) +
+  geom_line(data = d1.6, aes(x = medPT, y = medrT3, group = Cancer_Type, 
+                             color = Cancer_Type))
+)
+
+```
+
+Saving dataset.
+```{r}
+write.csv(thyro4, file = "thyro4.csv", row.names = FALSE) 
+```
+
+
