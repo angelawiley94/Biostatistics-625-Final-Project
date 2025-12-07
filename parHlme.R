@@ -1,16 +1,19 @@
 parHlme = function(
     data, 
-    fixedi, 
-    randomi, 
-    mixturei = NULL,
-    subject = "ID",
-    ng,
-    ncores = parallel::detectCores() - 1,
-    seeds = 1:4
+    fixedi, # Fixed effects
+    randomi, # Random effects
+    mixturei = NULL, # Mixture effects
+    subject = "ID", 
+    ng, # ng = K classes
+    ncores = parallel::detectCores() - 1, 
+    modelCache = NULL,
+    seeds = 1:4 # Fits model 4 times. 
 ) {
-  start.time = Sys.time()
+  
+  if (is.null(modelCache)) modelCache <- list()
+  
   if (ng == 1) { 
-    return(
+    m1 =
       hlme(
         fixed   = fixedi,
         random  = randomi,
@@ -18,37 +21,35 @@ parHlme = function(
         ng      = 1,
         data    = data
       )
+    
+    modelCache[[1]] = m1
+    
+    return(list(
+      models = list(m1),
+      `Initial model` = NULL,
+      cache = modelCache
     )
-    message("Runtime: ", round(Sys.time() - start.time, 3), " seconds")
+    )
   }
   
   
   message("Fitting model with ng = ", ng - 1, " to obtain valid initialization...")
   
-  if (ng - 1 == 1) {
-    init_model = hlme(
-      data = data,
-      fixed = fixedi,
-      random = randomi,
-      subject = subject,
-      ng = 1
-    )
-  } else {
-  init_model = parHlme(
-    data    = data,
-    fixedi  = fixedi,
-    randomi = randomi,
-    mixturei = mixturei,
-    subject = subject,
-    ng      = ng - 1,
-    ncores  = ncores
+  recurRun = parHlme(
+    data      = data,
+    fixedi    = fixedi,
+    randomi   = randomi,
+    mixturei  = mixturei,
+    subject   = subject,
+    ng        = ng - 1,
+    ncores    = ncores,
+    seeds     = seeds,
+    modelCache = modelCache
   )
-  }
   
-  message("The valid initial model is set!")
-  lap.time1 = Sys.time()
-  message("Runtime: ", round(lap.time1 - start.time, 3), " seconds")
-  
+  modelCache <- recurRun$cache
+  init_model <- recurRun$cache[[ng - 1]]
+
   cl = parallel::makeCluster(ncores)
   parallel::clusterEvalQ(cl, library(lcmm))
   
@@ -57,8 +58,6 @@ parHlme = function(
     varlist = c("data","fixedi","randomi","mixturei","subject", "ng", "init_model"),
     envir = environment()
   )
-  
-  message("Fitting model with the valid initial model...")
   
   models = parallel::parLapply(cl, seeds, function(s) {
     set.seed(s)
@@ -78,17 +77,40 @@ parHlme = function(
   
   stopCluster(cl)
   
-  good = models[sapply(models, function(x) class(x)[1] == "hlme")]
+  goodModels <- Filter(function(x) {
+    inherits(x, "hlme") && !is.null(x$loglik) && is.finite(x$loglik)
+  }, models)
   
-  if (length(good) == 0)
+  if (length(goodModels) == 0)
     stop("All seeds failed for ng = ", ng)
   
-  end.time = Sys.time()
-  message("Runtime: ", round(end.time - start.time, 3), " seconds")
-  return(parHlme_results = list(
-    models = good,
+  modelBIC = sapply(goodModels, function(m) {m$BIC})
+  modelAIC = sapply(goodModels, function(m) {m$AIC})
+  modelLoglik = sapply(goodModels, function(m) {m$loglik})
+  
+  bestBIC = goodModels[[which.min(modelBIC)]]
+  bestAIC = goodModels[[which.min(modelAIC)]]
+  bestLoglik = goodModels[[which.max(modelLoglik)]]
+  
+  modelCache[[ng]] <- bestBIC
+  
+  return(parHlmeResults = list(
+    bestModels = list(
+      byAIC = list(
+        model = bestAIC,
+        score = min(modelAIC)
+        ),
+      byBIC = list(
+        model = bestBIC,
+        score = min(modelBIC)
+      ),
+      byLoglik = list(
+        model = bestLoglik,
+        score = max(modelLoglik)
+      )
+    ),
     `Initial model` = init_model,
-    runtime = round(end.time - start.time, 3)
+    cache = modelCache
   )
   )
 }
