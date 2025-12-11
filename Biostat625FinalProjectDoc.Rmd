@@ -270,9 +270,3 @@ Lyza Lash led the conceptualization of the project, as well as coding the Explor
 ## **GitHub Repository**
 The full analysis code and this report are available in a public GitHub repository for reproducibility and collaboration:
 ## **References**
-Haymart, M. R., Repplinger, D. J., Leverson, G. E., Elson, D. F., Sippel, R. S., Jaume, J. C., & Chen, H. (2008). Higher serum thyroid stimulating hormone level in thyroid nodule patients is associated with greater risks of differentiated thyroid cancer and advanced tumor stage. *The Journal of clinical endocrinology and metabolism*, *93*(3), 809–814. <https://doi.org/10.1210/jc.2007-2215>
-Princess Margaret Cancer Centre. (2025). Multi Visit Thyroid Cancer Monitoring Dataset- SHD [Data set]. Kaggle. <https://doi.org/10.34740/KAGGLE/DSV/11978409>
-Rinaldi, S., Plummer, M., Biessy, C., Tsilidis, K. K., Østergaard, J. N., Overvad, K., Tjønneland, A., Halkjaer, J., Boutron-Ruault, M. C., Clavel-Chapelon, F., Dossus, L., Kaaks, R., Lukanova, A., Boeing, H., Trichopoulou, A., Lagiou, P., Trichopoulos, D., Palli, D., Agnoli, C., Tumino, R., … Franceschi, S. (2014). Thyroid-stimulating hormone, thyroglobulin, and thyroid hormones and risk of differentiated thyroid carcinoma: the EPIC study. *Journal of the National Cancer Institute*, *106*(6), dju097. <https://doi.org/10.1093/jnci/dju097>
-Verbeek, H. H., de Groot, J. W. B., Sluiter, W. J., Muller Kobold, A. C., van den Heuvel,
-E. R., Plukker, J. T., & Links, T. P. (2020). Calcitonin testing for detection of medullary thyroid cancer in people with thyroid nodules. *The Cochrane database* *of systematic reviews*, *3*(3), CD010159. <https://doi.org/10.1002/14651858.CD010159.pub2>
-Yves Rosseel (2012). lavaan: An R Package for Structural Equation Modeling. *Journal of Statistical Software*, 48(2), 1-36. URL <http://www.jstatsoft.org/v48/i02/>
