@@ -1,0 +1,587 @@
+---
+title: "LGA"
+output: html_notebook
+---
+
+#### Variable Descriptions
+```{r Downloading packages and Importing Dataset}
+library(readr)
+library(ggplot2)
+library(purrr)
+library(tidyverse)
+library(cowplot)
+library(MASS)
+library(lcmm)
+library(parallel)
+
+ncores <- parallel::detectCores() - 1
+
+thyro4 <- read_csv(
+  "/Users/angelawiley/Documents/Documents - Angela’s MacBook Pro/Classes/BIOSTAT 625 Computing with Big Data/Biostat 625 Final Project/thyro4.csv",
+  show_col_types = FALSE
+)
+
+# These keep ID, TgT, CtT, rT3 and add a 'time' variable for hlme
+dTgT <- thyro4 %>%
+  mutate(time = elapsed_time_days) %>% 
+  dplyr::select(-c(Patient_ID, elapsed_time_days, Thyroglobulin_Level_Predicted))
+
+dCtT <- thyro4 %>%
+  mutate(time = elapsed_time_days) %>% 
+  dplyr::select(-c(Patient_ID, elapsed_time_days, Calcitonin_Level_Predicted))
+
+drT3 <- thyro4  %>%
+  mutate(time = elapsed_time_days) %>% 
+  dplyr::select(-c(Patient_ID, elapsed_time_days, Reverse_T3_Index))
+```
+
+
+## Latent Basic Modeling using lcmm package
+#### Single Latent Basis Modeling
+```{r Latent Basis on Tg}
+m1TgT <- hlme(
+  fixed   = TgT ~ time,
+  random  = ~ time,
+  subject = "ID",
+  ng      = 1,
+  data    = dTgT
+)
+
+summary(m1TgT)
+```
+
+```{r Latent Basis on ct}
+m1CtT <- hlme(
+  fixed   = CtT ~ time,
+  random  = ~ 1,
+  subject = "ID",
+  ng      = 1,
+  data    = dCtT
+)
+
+summary(m1CtT)
+```
+
+```{r Latent Basis on rT3}
+system.time(
+  m1rT3_tmp <- hlme(
+    fixed   = rT3 ~ time,
+    random  = ~ 1,
+    subject = "ID",
+    ng      = 1,
+    data    = drT3
+  )
+)
+
+m1rT3 <- m1rT3_tmp
+summary(m1rT3)
+```
+
+#### Start up parallel function for mixture latent growth modeling. 
+
+```{r}
+parHlme <- function(
+    ngi,           # number of classes
+    modelb,        # initial ng = 1 model
+    data, 
+    fixedi, 
+    randomi, 
+    mixturei,
+    subject = "ID",
+    seeds = 1:12,
+    ncores = parallel::detectCores() - 1
+) {
+  cl <- parallel::makeCluster(ncores)
+  on.exit(parallel::stopCluster(cl), add = TRUE)
+  
+  parallel::clusterEvalQ(cl, library(lcmm))
+  parallel::clusterExport(
+    cl,
+    c("data", "modelb", "fixedi", "randomi", "mixturei", "ngi", "subject"),
+    envir = environment()
+  )
+  
+  models <- parallel::parLapply(cl, seeds, function(s) {
+    set.seed(s)
+    try(
+      hlme(
+        fixed   = fixedi,
+        random  = randomi,
+        mixture = mixturei,
+        subject = subject,
+        ng      = ngi,
+        data    = data,
+        B       = modelb
+      ),
+      silent = TRUE
+    )
+  })
+  
+  # Keep only successful fits
+  goodModels <- Filter(
+    function(m) inherits(m, "hlme") && !is.null(m$loglik) && is.finite(m$loglik),
+    models
+  )
+  
+  if (length(goodModels) == 0) {
+    stop("All parallel hlme fits failed for ng = ", ngi)
+  }
+  
+  logliks    <- sapply(goodModels, function(m) m$loglik)
+  best_index <- which.max(logliks)
+  best_model <- goodModels[[best_index]]
+  
+  best_model
+}
+```
+
+```{r Run parHlme on TgT}
+m2TgT <- parHlme(
+  data     = dTgT,
+  modelb   = m1TgT,
+  ngi      = 2,
+  mixturei = ~ time,
+  randomi  = ~ time,
+  fixedi   = TgT ~ time,
+  subject  = "ID"
+)
+
+summary(m2TgT)
+table(m2TgT$pprob$class)
+```
+
+
+```{r}
+library(gtsummary)
+library(dplyr)
+
+## One row per patient (all patients in thyro4)
+thyro4_patient <- thyro4 %>%
+  group_by(Patient_ID) %>%
+  summarise(
+    age_baseline   = first(Age),
+    gender         = first(Gender),
+    bmi_baseline   = first(BMI),
+    tsh_risk       = first(TSH_Risk_Level),
+    calcification  = first(Calcification_Presence),
+    capsular_inv   = first(Capsular_Invasion_Indicator),
+    cancer_type    = first(Cancer_Type),
+    diagnosis      = first(Diagnosis_Label),   # 0 = benign, 1 = malignant
+    n_visits       = n(),
+    followup_days  = max(elapsed_time_days, na.rm = TRUE),
+    TgT_baseline   = TgT[which.min(Visit_Number)],
+    CtT_baseline   = CtT[which.min(Visit_Number)],
+    rT3_baseline   = rT3[which.min(Visit_Number)],
+    .groups = "drop"
+  ) %>%
+  mutate(
+    diagnosis = factor(
+      diagnosis,
+      levels = c(0, 1),
+      labels = c("Benign", "Malignant")
+    )
+  )
+
+tbl1 <- thyro4_patient %>%
+  select(-Patient_ID) %>%  # <-- keep IDs out of the table
+  rename(
+    `Age at first visit`    = age_baseline,
+    `Sex`                   = gender,
+    `BMI at first visit`    = bmi_baseline,
+    `TSH risk level`        = tsh_risk,
+    `Calcification`         = calcification,
+    `Capsular invasion`     = capsular_inv,
+    `Cancer type`           = cancer_type,
+    `Diagnosis`             = diagnosis,
+    `Number of visits`      = n_visits,
+    `Follow-up (days)`      = followup_days,
+    `Baseline Tg (Box–Cox)` = TgT_baseline,
+    `Baseline Ct (Box–Cox)` = CtT_baseline,
+    `Baseline rT3`          = rT3_baseline
+  ) %>%
+  tbl_summary(
+    by        = `Diagnosis`,
+    missing   = "no",
+    statistic = list(
+      all_continuous()  ~ "{mean} ({sd})",
+      all_categorical() ~ "{n} ({p}%)"
+    )
+  ) %>%
+  add_p(
+    test = list(
+      all_continuous()  ~ "t.test",
+      all_categorical() ~ "chisq.test"
+    )
+  ) %>%
+  bold_labels() %>%
+  bold_p(t = 0.05) %>%
+  modify_caption("**Table 1. Baseline characteristics of thyroid patients by diagnosis (N = {N})**")
+
+tbl1
+
+library(gt)
+
+gtsummary::as_gt(tbl1) %>%
+  gt::gtsave("Table1_BaselineCharacteristics.docx")
+```
+
+```{r}
+fig1 <- cowplot::plot_grid(
+  plotlist = L2,
+  ncol = 1,
+  labels = c("A", "B", "C")
+)
+
+fig1
+```
+
+```{r}
+m2TgT <- parHlme(
+  data     = dTgT,
+  modelb   = m1TgT,
+  ngi      = 2,
+  mixturei = ~ time,
+  randomi  = ~ time,
+  fixedi   = TgT ~ time
+)
+```
+
+```{r}
+# Grid of times over observed range
+time_grid <- seq(
+  from = 0,
+  to   = max(dTgT$time, na.rm = TRUE),
+  length.out = 100
+)
+
+newdata <- data.frame(
+  ID   = 1,           # dummy ID: we only care about mean trajectory
+  time = time_grid
+)
+
+pred_out <- predictY(
+  m2TgT,
+  newdata  = newdata,
+  var.time = "time"
+)
+
+# pred_out$pred is a matrix: rows = times, cols = classes
+pred_df <- as.data.frame(pred_out$pred)
+names(pred_df) <- paste0("class", seq_len(ncol(pred_df)))
+pred_df$time <- time_grid
+
+pred_long <- pred_df %>%
+  tidyr::pivot_longer(
+    cols      = starts_with("class"),
+    names_to  = "class",
+    values_to = "mean_TgT"
+  )
+
+fig3 <- ggplot(pred_long, aes(x = time, y = mean_TgT, color = class)) +
+  geom_line(linewidth = 1) +
+  labs(
+    x = "Time since first observed visit (days)",
+    y = "Predicted transformed Tg",
+    color = "Latent class"
+  ) +
+  theme_minimal()
+
+fig3
+```
+
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(tibble)
+
+##-------------------------------------------
+## 2-class mixture timing: TgT, CtT, rT3
+##-------------------------------------------
+
+## TgT: serial vs parallel
+time_serial_TgT <- system.time({
+  m2TgT_serial <- hlme(
+    fixed   = TgT ~ time,
+    random  = ~ time,
+    mixture = ~ time,
+    subject = "ID",
+    ng      = 2,
+    data    = dTgT,
+    B       = m1TgT
+  )
+})
+
+time_parallel_TgT <- system.time({
+  m2TgT_parallel <- parHlme(
+    data     = dTgT,
+    modelb   = m1TgT,
+    ngi      = 2,
+    mixturei = ~ time,
+    randomi  = ~ time,
+    fixedi   = TgT ~ time
+  )
+})
+
+## CtT: serial vs parallel
+## (match your single-class model: random = ~ 1)
+time_serial_CtT <- system.time({
+  m2CtT_serial <- hlme(
+    fixed   = CtT ~ time,
+    random  = ~ 1,
+    mixture = ~ time,
+    subject = "ID",
+    ng      = 2,
+    data    = dCtT,
+    B       = m1CtT
+  )
+})
+
+time_parallel_CtT <- system.time({
+  m2CtT_parallel <- parHlme(
+    data     = dCtT,
+    modelb   = m1CtT,
+    ngi      = 2,
+    mixturei = ~ time,
+    randomi  = ~ 1,
+    fixedi   = CtT ~ time
+  )
+})
+
+## rT3: serial vs parallel
+time_serial_rT3 <- system.time({
+  m2rT3_serial <- hlme(
+    fixed   = rT3 ~ time,
+    random  = ~ 1,
+    mixture = ~ time,
+    subject = "ID",
+    ng      = 2,
+    data    = drT3,
+    B       = m1rT3
+  )
+})
+
+time_parallel_rT3 <- system.time({
+  m2rT3_parallel <- parHlme(
+    data     = drT3,
+    modelb   = m1rT3,
+    ngi      = 2,
+    mixturei = ~ time,
+    randomi  = ~ 1,
+    fixedi   = rT3 ~ time
+  )
+})
+
+##-------------------------------------------
+## Timing summary across all three outcomes
+##-------------------------------------------
+
+timing_df <- tibble(
+  Outcome = rep(c("TgT", "CtT", "rT3"), each = 2),
+  Method  = rep(c("Serial hlme()", "Parallel parHlme()"), times = 3),
+  Elapsed = c(
+    time_serial_TgT["elapsed"],   time_parallel_TgT["elapsed"],
+    time_serial_CtT["elapsed"],   time_parallel_CtT["elapsed"],
+    time_serial_rT3["elapsed"],   time_parallel_rT3["elapsed"]
+  )
+) %>%
+  mutate(
+    Elapsed         = as.numeric(Elapsed),
+    Elapsed_minutes = Elapsed / 60
+  ) %>%
+  group_by(Outcome) %>%
+  mutate(
+    Speedup = max(Elapsed) / Elapsed
+  ) %>%
+  ungroup()
+
+timing_df
+```
+
+```{r}
+fig_timing_all <- ggplot(timing_df,
+                         aes(x = Method, y = Elapsed_minutes, fill = Method)) +
+  geom_col(width = 0.6) +
+  geom_text(
+    aes(label = sprintf("%.1f min\nx%.1f", Elapsed_minutes, Speedup)),
+    vjust = -0.3,
+    size = 3
+  ) +
+  facet_wrap(~ Outcome, scales = "free_y") +
+  labs(
+    x = "",
+    y = "Elapsed time (minutes)",
+    title = "Computation time for 2-class growth mixture models",
+    subtitle = "Serial hlme() vs parallel parHlme() for TgT, CtT, and rT3"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+fig_timing_all
+```
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(lcmm)
+
+## Helper: prediction curve for a single hlme model, using the *data* you fit it on
+make_pred_curve <- function(model, dat, biomarker_label) {
+  time_range <- range(dat$time, na.rm = TRUE)
+
+  time_grid <- seq(
+    from = time_range[1],
+    to   = time_range[2],
+    length.out = 200
+  )
+
+  newdata <- data.frame(
+    ID   = 1,          # dummy ID (population mean)
+    time = time_grid
+  )
+
+  preds <- predictY(model, newdata = newdata, var.time = "time")$pred
+
+  tibble(
+    time      = time_grid,
+    mean_val  = as.numeric(preds),
+    biomarker = biomarker_label
+  )
+}
+
+## Build curves for each biomarker using the correct data object
+curve_TgT <- make_pred_curve(m1TgT, dTgT, "TgT (transformed)")
+curve_CtT <- make_pred_curve(m1CtT, dCtT, "CtT (transformed)")
+curve_rT3 <- make_pred_curve(m1rT3, drT3, "rT3")
+
+all_curves <- bind_rows(curve_TgT, curve_CtT, curve_rT3)
+
+## Choose *wide* y-axis ranges to show how flat the lines really are
+axis_ranges <- tibble(
+  biomarker = c("TgT (transformed)", "CtT (transformed)", "rT3"),
+  y_min     = c(0, 0, 0.20),
+  y_max     = c(8, 4, 0.30)
+)
+
+all_curves2 <- all_curves %>%
+  left_join(axis_ranges, by = "biomarker")
+
+## Faceted figure with de-zoomed y-axes
+fig_flat <- ggplot(all_curves2, aes(x = time, y = mean_val)) +
+  # force facet-specific axis limits
+  geom_blank(aes(y = y_min)) +
+  geom_blank(aes(y = y_max)) +
+  geom_line(linewidth = 1.1) +
+  facet_wrap(~ biomarker, ncol = 1, scales = "free_y") +
+  labs(
+    x = "Time since first observed visit (days)",
+    y = "Predicted mean biomarker level",
+    title = "Single-class latent growth models for TgT, CtT, and rT3"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid.minor = element_blank(),
+    strip.text       = element_text(face = "bold"),
+    plot.title       = element_text(face = "bold", hjust = 0.5)
+  )
+
+fig_flat
+```
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(lcmm)
+
+##--------------------------------------------------
+## Helper: build class-specific curves for 2-class hlme
+##--------------------------------------------------
+make_mixture_curve <- function(model, dat, biomarker_label) {
+  # Range of observed time
+  time_range <- range(dat$time, na.rm = TRUE)
+  time_grid  <- seq(time_range[1], time_range[2], length.out = 200)
+  
+  # New data (dummy ID, we only care about the mean trajectory)
+  newdata <- data.frame(
+    ID   = 1,
+    time = time_grid
+  )
+  
+  # Predict class-specific means
+  pred <- predictY(model, newdata = newdata, var.time = "time")
+  
+  # pred$pred is typically an n_time x ng matrix for hlme
+  pred_mat <- as.data.frame(pred$pred)
+  
+  if (ncol(pred_mat) != 2L) {
+    stop("Expected a 2-class model (ng = 2); got ", ncol(pred_mat), " columns.")
+  }
+  
+  colnames(pred_mat) <- c("class1", "class2")
+  
+  pred_mat %>%
+    mutate(
+      time      = time_grid,
+      biomarker = biomarker_label
+    ) %>%
+    pivot_longer(
+      cols      = starts_with("class"),
+      names_to  = "class",
+      values_to = "mean_val"
+    ) %>%
+    mutate(
+      class = ifelse(class == "class1", "Class 1", "Class 2")
+    )
+}
+
+##--------------------------------------------------
+## Build curves for each biomarker
+##  (rename model objects here if yours are m2TgT, etc.)
+##--------------------------------------------------
+mix_TgT <- make_mixture_curve(m2TgT_serial, dTgT, "TgT (transformed)")
+mix_CtT <- make_mixture_curve(m2CtT_serial, dCtT, "CtT (transformed)")
+mix_rT3 <- make_mixture_curve(m2rT3_serial, drT3, "rT3")
+
+mix_all <- bind_rows(mix_TgT, mix_CtT, mix_rT3)
+
+##--------------------------------------------------
+## Optional: widen y-axes so “flatness” is visually clear
+##  (tweak these ranges if you want)
+##--------------------------------------------------
+axis_ranges_mix <- tibble(
+  biomarker = c("TgT (transformed)", "CtT (transformed)", "rT3"),
+  y_min     = c(0, 0, 0.20),
+  y_max     = c(8, 4, 0.30)
+)
+
+mix_all2 <- left_join(mix_all, axis_ranges_mix, by = "biomarker")
+
+##--------------------------------------------------
+## FINAL FIGURE: Two-class mixture trajectories, faceted
+##--------------------------------------------------
+fig_mix <- ggplot(mix_all2, aes(x = time, y = mean_val, color = class)) +
+  geom_blank(aes(y = y_min)) +
+  geom_blank(aes(y = y_max)) +
+  geom_line(linewidth = 1.1, alpha = 0.9) +
+  facet_wrap(~ biomarker, scales = "free_y", ncol = 1) +
+  scale_color_manual(values = c("#0072B2", "#D55E00")) +
+  labs(
+    x        = "Time since first observed visit (days)",
+    y        = "Predicted mean biomarker level",
+    color    = "Latent class",
+    title    = "Two-class growth mixture models for TgT, CtT, and rT3",
+    subtitle = "Class-specific trajectories overlap almost perfectly"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    strip.text  = element_text(face = "bold", size = 12),
+    plot.title  = element_text(face = "bold", hjust = 0.5),
+    legend.position = "bottom"
+  )
+
+fig_mix
+```
+
